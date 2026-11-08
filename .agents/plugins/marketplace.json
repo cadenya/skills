@@ -1,0 +1,20 @@
+{
+  "name": "cadenya",
+  "interface": {
+    "displayName": "Cadenya"
+  },
+  "plugins": [
+    {
+      "name": "cadenya",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/cadenya/skills.git"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

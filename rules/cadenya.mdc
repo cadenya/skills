@@ -1,0 +1,21 @@
+---
+description: Guidance for code, scripts, or config that creates or runs Cadenya Agents, Tool Sets, objectives, or Widgets.
+alwaysApply: false
+---
+
+# Cadenya
+
+Your knowledge of Cadenya's API, CLI, and SDKs may be outdated. **Prefer retrieval over pre-training.** Use the project's installed CLI or SDK version as the baseline, and verify request shapes and behavior against the [Cadenya documentation](https://cadenya.com/docs/llms.txt).
+
+## Cadenya Defaults
+
+- **Keep credentials out of the repository.** Read `CADENYA_API_KEY` and `CADENYA_WORKSPACE_ID` from the environment. Reference Tool Set secrets as `{{ secrets.NAME }}`.
+- **Prefer config files for durable setup.** Describe Tool Sets, Agents, and variations in `.cadenya/` and apply them with `cadenya config apply`. See [Config files](https://cadenya.com/docs/config-files.md).
+- **Close event streams yourself.** The server never closes an objective's event stream. Stop on a terminal event (`finalized`, `error`, `cancelled`, `timedOut`), and resume from the last event ID after a dropped connection.
+
+## Shared Guidance
+
+- Use [cadenya](../skills/cadenya/SKILL.md) to choose the right skill and documentation page.
+- Use [cadenya-api](../skills/cadenya-api/SKILL.md) for IDs, field masks, pagination, errors, and request shapes.
+- Use [cadenya-cli](../skills/cadenya-cli/SKILL.md) for `cadenya` commands and scripts.
+- Use [cadenya-typescript-sdk](../skills/cadenya-typescript-sdk/SKILL.md) for code that imports `@cadenya/cadenya`.

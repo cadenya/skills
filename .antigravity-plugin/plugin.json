@@ -1,0 +1,34 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "cadenya",
+  "displayName": "Cadenya",
+  "version": "1.0.0",
+  "description": "Build, run, and manage AI agents on Cadenya, the hosted agent runtime, with Cadenya Skills and the Cadenya MCP server.",
+  "logo": "icon.png",
+  "suggestedPrompts": [
+    "Set up a Cadenya Agent with an MCP Tool Set and run an objective",
+    "Write Cadenya config files for my Agents and apply them",
+    "Stream a Cadenya objective's events and approve its tool calls"
+  ],
+  "category": [
+    "Developer Tools"
+  ],
+  "author": {
+    "name": "Cadenya",
+    "url": "https://cadenya.com"
+  },
+  "homepage": "https://cadenya.com",
+  "repository": "https://github.com/cadenya/skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "cadenya",
+    "agents",
+    "agent-runtime",
+    "mcp",
+    "tool-sets",
+    "objectives",
+    "widgets",
+    "cli",
+    "sdk"
+  ]
+}

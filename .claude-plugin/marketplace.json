@@ -1,0 +1,37 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "cadenya",
+  "description": "Cadenya Skills and the Cadenya MCP server for building agents on Cadenya.",
+  "metadata": {
+    "description": "Cadenya Skills and the Cadenya MCP server for building agents on Cadenya."
+  },
+  "owner": {
+    "name": "Cadenya",
+    "url": "https://cadenya.com"
+  },
+  "plugins": [
+    {
+      "name": "cadenya",
+      "source": "./",
+      "description": "Build, run, and manage AI agents on Cadenya, the hosted agent runtime, with Cadenya Skills and the Cadenya MCP server.",
+      "author": {
+        "name": "Cadenya",
+        "url": "https://cadenya.com"
+      },
+      "homepage": "https://cadenya.com",
+      "repository": "https://github.com/cadenya/skills",
+      "license": "Apache-2.0",
+      "keywords": [
+        "cadenya",
+        "agents",
+        "agent-runtime",
+        "mcp",
+        "tool-sets",
+        "objectives",
+        "widgets",
+        "cli",
+        "sdk"
+      ]
+    }
+  ]
+}

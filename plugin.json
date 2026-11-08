@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "cadenya",
+  "version": "1.0.0",
+  "description": "Build, run, and manage AI agents on Cadenya, the hosted agent runtime, with Cadenya Skills and the Cadenya MCP server.",
+  "author": {
+    "name": "Cadenya",
+    "url": "https://cadenya.com"
+  },
+  "homepage": "https://cadenya.com",
+  "repository": "https://github.com/cadenya/skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "cadenya",
+    "agents",
+    "agent-runtime",
+    "mcp",
+    "tool-sets",
+    "objectives",
+    "widgets",
+    "cli",
+    "sdk"
+  ]
+}

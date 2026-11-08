@@ -1,0 +1,25 @@
+{
+  "name": "cadenya",
+  "description": "Build, run, and manage AI agents on Cadenya, the hosted agent runtime, with Cadenya Skills and the Cadenya MCP server.",
+  "version": "1.0.0",
+  "mcpServers": "./.mcp.json",
+  "author": {
+    "name": "Cadenya",
+    "url": "https://cadenya.com"
+  },
+  "homepage": "https://cadenya.com",
+  "privacyPolicyUrl": "https://cadenya.com/legal/privacy",
+  "repository": "https://github.com/cadenya/skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "cadenya",
+    "agents",
+    "agent-runtime",
+    "mcp",
+    "tool-sets",
+    "objectives",
+    "widgets",
+    "cli",
+    "sdk"
+  ]
+}

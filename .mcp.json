@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cadenya": {
+      "type": "http",
+      "url": "https://mcp.cadenya.com/mcp"
+    }
+  }
+}
