@@ -1,0 +1,11 @@
+{
+  "identifier": "cadenya-cadenya-mcp",
+  "name": "Cadenya MCP",
+  "version": "1.0.0",
+  "author": "Cadenya",
+  "authorUrl": "https://github.com/cadenya",
+  "homepage": "https://cadenya.com",
+  "cloudEndpoint": "https://mcp.cadenya.com/mcp",
+  "description": "Manage Cadenya Agents, Tool Sets, objectives, memory, Widgets, and workspaces from an MCP client. Three tools discover API operations, read resources, and make changes. Uses Streamable HTTP with OAuth or bearer-token authentication. Requires MCP protocol revision 2026-07-28. Setup: https://cadenya.com/docs/mcp-server",
+  "tags": ["cadenya", "agents", "agent-runtime", "mcp", "automation"]
+}
