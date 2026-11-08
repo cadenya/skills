@@ -72,17 +72,21 @@ client.objectives.approveToolCall(objectiveId, toolCallId, params?, options?)
 | `workspaces` | `list` |
 | `workspaceAdmin` | `listAccount`, `create`, `retrieve`, `update`, `archive`, `listMembers`, `addMember`, `removeMember`, `listProfiles` |
 | `apiKeys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `addWorkspace`, `removeWorkspace` (account keys) |
-| `aiProviderKeys`, `models` | CRUD; `models.enable`, `models.disable`, `models.swapOnVariations` |
+| `aiProviderKeys` | CRUD |
+| `models` | `list`, `create`, `retrieve`, `update`, `enable`, `disable`, `swapOnVariations` (no `delete`) |
 | `toolSets` | `list`, `create`, `retrieve`, `update`, `delete`, `archive`, `unarchive`, `listEvents`, `listUsage`, `retrieveOpenApiSpec` |
 | `toolSets.tools` | `list`, `create`, `retrieve`, `update`, `delete`, `omit`, `restore` |
 | `toolSets.secrets`, `workspaceSecrets` | `list`, `create`, `retrieve`, `update`, `delete` |
 | `agents` | `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `unpublish`, `archive`, `unarchive`, `listFeedback`, `listWebhookDeliveries` |
 | `agents.variations` | `list`, `create`, `retrieve`, `update`, `delete`, `addAssignment`, `removeAssignment`, `addMemoryLayer`, `updateMemoryLayer`, `removeMemoryLayer` |
 | `agents.schedules` | CRUD, `pause`, `resume`, `archive` |
-| `objectives` | `list`, `create`, `retrieve`, `listEvents`, `streamEvents`, `continue`, `cancel`, `compact`, `listToolCalls`, `retrieveToolCall`, `approveToolCall`, `denyToolCall`, `setToolCallContent`, `listTools`, `listContextWindows`, `retrieveDiagnostics`, `listFeedback`, `createFeedback` |
+| `objectives` | `list`, `create`, `createAndStream`, `retrieve`, `listEvents`, `streamEvents`, `continue`, `interrupt`, `cancel`, `compact`, `listQueuedActions`, `removeQueuedAction`, `listToolCalls`, `retrieveToolCall`, `approveToolCall`, `denyToolCall`, `setToolCallContent`, `listTools`, `listContextWindows`, `retrieveDiagnostics`, `listFeedback`, `createFeedback` |
 | `memoryLayers`, `memoryLayers.entries` | CRUD |
 | `tenants` | `list`, `retrieve`, `delete`, `listSubjects` |
-| `widgets`, `widgetSessions` | CRUD; `widgetSessions.revoke`, `widgetSessions.deleteTenant` |
+| `widgets` | CRUD, `archive`, `unarchive` |
+| `widgetSessions` | `list`, `create`, `retrieve`, `delete`, `revoke`, `deleteTenant` |
+| `agentPools` | CRUD, `activate`, `deactivate`, `archive`, `unarchive` |
+| `trustedEndpoints` | `list`, `create`, `retrieve`, `delete`, `verify` |
 | `uploads` | `create`, `retrieve` |
 | `toolSearch` | `searchOrSets` |
 | `webhooks` | `unwrap` (pre-wired with `webhookSecret`) |
@@ -109,7 +113,7 @@ const toolSet = await client.toolSets.create({
   },
 });
 
-// Agent plus its default variation in one call. variationSelectionMode is required in the type.
+// Agent plus its default variation in one call. variationSelectionMode defaults to WEIGHTED.
 const agent = await client.agents.create({
   metadata: { name: 'Support Triager', externalId: 'support-triager' },
   spec: { variationSelectionMode: 'VARIATION_SELECTION_MODE_RANDOM' },
@@ -117,15 +121,15 @@ const agent = await client.agents.create({
     metadata: { name: 'default', externalId: 'support-triager-default' },
     spec: {
       systemPromptTemplate: 'You triage support tickets for {{ system_prompt_data.customer_name }}.',
-      modelConfig: { modelId: 'getting-started-key.claude-opus-5' }, // "<provider-key-slug>.<model-slug>" or model_…
+      modelConfig: { modelId: 'getting-started-key.anthropic-claude-haiku-latest' }, // "<provider-key-external-id>.<model-external-id>" or model_…
       constraints: { maxToolCalls: 20, inactivityTimeout: '3600s' },  // durations are strings
     },
   },
 });
 
-// Assignment: union body under `body`. Tools attach to variations, not agents.
+// Assignment: the params object is the union itself. Tools attach to variations, not agents.
 await client.agents.variations.addAssignment(agent.metadata.id, variationId, {
-  body: { type: 'toolSetId', toolSetId: toolSet.metadata.id },
+  type: 'toolSetId', toolSetId: toolSet.metadata.id,
 });
 
 // Objective
@@ -137,7 +141,7 @@ const objective = await client.objectives.create({
 });
 ```
 
-Other adapters: `{ type: 'openapi', openapi: { type: 'url', url } }` (or `{ type: 'uploadId', uploadId }`), `{ type: 'http', http: { baseUrl } }`, `{ type: 'bare', bare: {} }`. Doc comments inside the package that mention `${SECRET_NAME}` are stale; the server accepts only `{{ secrets.NAME }}`. Create a secret before the tool set that references it: the create performs a live sync with those headers.
+Other adapters: `{ type: 'openapi', openapi: { type: 'url', url } }` (or `{ type: 'uploadId', uploadId }`), `{ type: 'http', http: { baseUrl } }`, `{ type: 'bare', bare: {} }`. Doc comments inside the package that mention `${SECRET_NAME}` are stale; the server rejects `$` references and accepts only `{{ secrets.NAME }}`. The MCP and OpenAPI create checks the source live with resolved headers (it must list at least one tool), but skips that check when a header names a secret that does not exist yet. Create the secret first, or pass it in `spec.secrets: [{ name, value }]`, so a bad URL or token fails at create time.
 
 `undefined` fields are dropped from the wire; read-only fields on `Param` types are stripped, so a fetched resource can be edited and sent back.
 
@@ -186,41 +190,35 @@ try {
 }
 ```
 
-Validation failures are `status === 400` with `details` containing `google.rpc.BadRequest.fieldViolations[]` whose `field` is the proto path (`spec.model_config.model_id`).
+Validation failures are `status === 400` with `message` `validation failed`; the reason is in `details`, a `google.rpc.BadRequest` with `fieldViolations[]` whose `field` is the proto path (`spec.model_config.model_id`) and `description` says what is wrong.
 
 ## Retries, timeouts, per-request options
 
 `RequestOptions` (last argument): `timeout`, `maxRetries`, `signal`, `headers`, `lastEventId`, `reconnect`.
 
-- Retries default to 0 and only ever apply to GET/HEAD/PUT/DELETE (408, 409, 429, 5xx, connection errors), honoring `Retry-After`. Set `maxRetries` on the client to enable; set it on a single call to opt a POST/PATCH in.
+- Retries default to 0 and by default apply only to GET/HEAD/PUT/DELETE (408, 409, 429, 500, 502, 503, 504, connection errors), honoring `Retry-After`. Set `maxRetries` on the client to enable; set it on a single call to opt a POST/PATCH in.
 - `timeout` of 0 or less disables the deadline. Streams bound only header acquisition; the body lives under your `signal`.
 
 ## Streaming objective events
 
-Semantics you must code around:
-
-- `streamEvents` without `lastEventId` delivers only events that arrive after the connection opens. With `lastEventId`, the server replays everything after that ID and then goes live.
-- The server never closes the stream on its own. Break on a terminal event (`finalized`, `error`, `cancelled`, `timedOut`) and `close()`.
-- An `assistantMessage` whose `toolCalls` is empty ends the turn; the objective is then `STATE_WAITING` until you `continue` it or the inactivity timeout fires.
-- A stream is consumed once. Mid-stream transport drops reconnect from `stream.lastEventId` (5 attempts per outage); pass `{ reconnect: false }` to handle drops yourself with `APIConnectionError` plus `lastEventId`.
-- A replayed `toolApprovalRequested` for a call you already approved makes the approve call fail with 400 (code 9, not waiting for approval); treat that as already handled.
-- A clean end of stream (load balancers cut connections after about 10 minutes) ends the loop with no terminal event and no reconnect. Track `event.metadata.id` as your checkpoint (`stream.lastEventId` is undefined until an event with an ID arrives) and reopen from it in an outer loop until you have seen a terminal event.
+Default: start and watch a new objective with `createAndStream`. It needs `metadata.externalId`, the idempotency key: a repeat of the request (including the SDK's automatic reconnect, which re-sends the POST) attaches to the objective that already has that external ID instead of starting another. The first frame is `{ type: 'objective', objective }`, every later one `{ type: 'event', event }`. The stream ends by itself once the objective settles (`OBJECTIVE_STATE_WAITING`, `FINALIZED`, `FAILED`, `CANCELLED`, or `TIMED_OUT`).
 
 ```ts
-const history = await client.objectives.listEvents(objectiveId, { sortOrder: 'asc' });
-let lastEventId: string | undefined;
-for await (const event of history) { handle(event); lastEventId = event.metadata.id; }
+const SETTLED = new Set(['OBJECTIVE_STATE_WAITING', 'OBJECTIVE_STATE_FINALIZED', 'OBJECTIVE_STATE_FAILED', 'OBJECTIVE_STATE_CANCELLED', 'OBJECTIVE_STATE_TIMED_OUT']);
 
-const stream = await client.objectives.streamEvents(objectiveId, undefined, { lastEventId });
-try {
-  for await (const event of stream) {
-    if (handle(event) === 'done') break;   // handle() returns 'done' on a terminal event or a turn-ending assistantMessage
-  }
-} finally {
-  await stream.close();
+const stream = await client.objectives.createAndStream({
+  agentId: 'external_id:support-triager',
+  metadata: { externalId: 'ticket-4821' },
+  systemPromptData: { customer_name: 'Ada' },
+  firstUserMessage: 'Summarize the open tickets.',
+});
+let objectiveId = '';
+for await (const frame of stream) {
+  if (frame.type === 'objective') objectiveId = frame.objective.metadata.id;
+  else handle(objectiveId, frame.event);
 }
 
-function handle(event: ObjectiveEvent): 'done' | undefined {
+function handle(objectiveId: string, event: ObjectiveEvent): 'settled' | undefined {
   const data = event.data;                 // discriminated on data.type; payload sits under the same-named key
   switch (data.type) {
     case 'toolApprovalRequested':
@@ -228,9 +226,42 @@ function handle(event: ObjectiveEvent): 'done' | undefined {
       return;
     case 'assistantMessage':
       if (data.assistantMessage.content) console.log(data.assistantMessage.content);
-      return (data.assistantMessage.toolCalls?.length ?? 0) === 0 ? 'done' : undefined;
-    case 'finalized': console.log(data.finalized.output); return 'done';
-    case 'error': case 'cancelled': case 'timedOut': return 'done';
+      return;
+    case 'finalized':
+      console.log(data.finalized.output);
+      return;
+    case 'stateChanged':
+      return SETTLED.has(data.stateChanged.toState) ? 'settled' : undefined;
+  }
+}
+```
+
+`OBJECTIVE_STATE_WAITING` means the turn ended: the objective waits for `continue` or the inactivity timeout. After `continue`, watch it again with `streamEvents`.
+
+`streamEvents` attaches to an existing objective. Semantics you must code around:
+
+- Without `lastEventId` it delivers only events that arrive after the connection opens. With `lastEventId`, the server replays everything after that event and then goes live.
+- The server never closes this stream on its own. Break on a settling `stateChanged` and `close()`.
+- Only durable `objevt_` IDs are resume points. The stream also yields heartbeat (`hb_`) and delta (`dlt_`) events; sending one of their IDs as `lastEventId` fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.lastEventId` only ever holds a durable ID (or the one you resumed from), so checkpoint with it rather than `event.metadata.id`.
+- A stream is consumed once. Mid-stream transport drops reconnect from `stream.lastEventId` (5 attempts per outage); pass `{ reconnect: false }` to handle drops yourself (`APIConnectionError`).
+- A clean end of stream (load balancers cut connections after about 10 minutes) ends the loop with no settling event and no reconnect. Reopen from `stream.lastEventId` in an outer loop until you have seen one.
+- A replayed `toolApprovalRequested` for a call you already approved makes the approve call fail with 400 (code 9, `not waiting for approval`); treat that as already handled.
+
+```ts
+const history = await client.objectives.listEvents(objectiveId, { sortOrder: 'asc' });
+let lastEventId: string | undefined;
+let settled = false;
+for await (const event of history) { if (handle(objectiveId, event)) settled = true; lastEventId = event.metadata.id; }
+
+while (!settled) {
+  const stream = await client.objectives.streamEvents(objectiveId, undefined, { lastEventId });
+  try {
+    for await (const event of stream) {
+      if (handle(objectiveId, event) === 'settled') { settled = true; break; }
+    }
+  } finally {
+    lastEventId = stream.lastEventId;
+    await stream.close();
   }
 }
 ```
@@ -249,9 +280,9 @@ app.post('/cadenya', express.raw({ type: 'application/json' }), async (req, res)
 });
 ```
 
-The `UnwrapWebhookEvent.type` union names only the 13 message and tool kinds, so a comparison against `'objective_event.finalized'` is a type error even though the delivery arrives; switch on `event.data.objectiveEvent.data.type`, which carries every kind.
+The `UnwrapWebhookEvent.type` union names only 14 kinds (message, tool, sub-agent, memory, reasoning, error, and `state_changed`), so a comparison against `'objective_event.finalized'` is a type error even though the delivery arrives; switch on `event.data.objectiveEvent.data.type`, which carries every kind.
 
-Verification follows Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, secret `whsec_…` from the account's `webhookEventsHmacSecret`, 5-minute tolerance. Pass the raw body bytes; a re-serialized body fails. Failures throw `WebhookVerificationError`.
+Verification follows Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, secret `whsec_…` from `(await client.accounts.retrieve()).info.webhookEventsHmacSecret`, 5-minute tolerance. Pass the raw body bytes; a re-serialized body fails. Failures throw `WebhookVerificationError`.
 
 ## Raw responses and logging
 
@@ -272,7 +303,7 @@ const toolSet = await client.toolSets.create({
   spec: { adapter: { type: 'mcp', mcp: { url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer {{ secrets.MCP_TOKEN }}' } } } },
 });
 
-const model = (await client.models.list({ prefix: 'claude', state: 'STATE_ENABLED', limit: 1 })).items[0];
+const model = (await client.models.list({ prefix: 'anthropic', state: 'STATE_ENABLED', limit: 1 })).items[0];
 if (!model) throw new Error('no enabled model matches');
 const agent = await client.agents.create({
   metadata: { name: 'Support Triager', externalId: 'support-triager' },
@@ -283,7 +314,7 @@ const agent = await client.agents.create({
   },
 });
 const variation = (await client.agents.variations.list(agent.metadata.id, { limit: 1 })).items[0]; // create returns the agent only
-await client.agents.variations.addAssignment(agent.metadata.id, variation.metadata.id, { body: { type: 'toolSetId', toolSetId: toolSet.metadata.id } });
+await client.agents.variations.addAssignment(agent.metadata.id, variation.metadata.id, { type: 'toolSetId', toolSetId: toolSet.metadata.id });
 await client.agents.publish(agent.metadata.id);   // objectives on a STATE_DRAFT agent are rejected
 
 const objective = await client.objectives.create({
@@ -291,7 +322,7 @@ const objective = await client.objectives.create({
   systemPromptData: { customer_name: 'Ada' },
   firstUserMessage: 'Summarize the open tickets.',
 });
-// … stream as shown above …
+// … watch it with streamEvents as above, or start it with createAndStream instead …
 await client.objectives.createFeedback(objective.metadata.id, { metadata: {}, data: { score: 1, comment: 'Accurate summary' } });
 await client.objectives.continue(objective.metadata.id, { message: 'Which one is most urgent?' });
 ```
@@ -301,14 +332,16 @@ await client.objectives.continue(objective.metadata.id, { message: 'Which one is
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `Missing 'workspaceId'` | no client default and none in params | set `CADENYA_WORKSPACE_ID`, `workspaceId` on the client, or `params.workspaceId` |
-| 400 `agent must be published to create an objective` | agent is `STATE_DRAFT` | `client.agents.publish(id)` |
-| 400 on `spec.model_config.model_id` | wrong `modelId` form | `model_…` ID from `models.list`, or `<provider-key-slug>.<model-slug>` |
-| 429 `ResourceExhausted` creating a second variation | plan limit of 1 variation per agent on the default plan | use `defaultVariation`; edit it instead of adding |
+| 400 `validation failed`, field violation `agent_id`: `agent must be published to create an objective` | agent is `STATE_DRAFT` | `client.agents.publish(id)` |
+| 400 on `spec.model_config.model_id` | wrong `modelId` form | `model_…` ID from `models.list`, or `<provider-key-external-id>.<model-external-id>` |
+| 429 `the account has reached its plan's limit of N for agent_variations` | the plan caps variations across the whole account, every workspace (Free: 3); an agent's `defaultVariation` counts too | edit an existing variation, or archive agents you no longer use (their variations stop counting) |
 | stream yields nothing for a finished objective | no `lastEventId` | replay with `listEvents({ sortOrder: 'asc' })`, then stream from the last ID |
 | `stream already consumed` | iterated a `Stream` twice | open a new stream with `{ lastEventId: stream.lastEventId }` |
-| connection stays open after the objective finished | stream never closes itself | `break` on terminal events and `close()` |
+| `streamEvents` connection stays open after the objective settled | that stream never closes itself | `break` on a settling `stateChanged` and `close()`, or use `createAndStream` |
+| 400 `metadata.externalId is required` from `createAndStream` | the idempotency key is missing | set `metadata.externalId` |
+| 400 `Last-Event-ID must be a persisted objevt_ event ID` | resumed from a heartbeat or delta ID | resume from `stream.lastEventId` |
 | POST silently not retried | retries apply to idempotent methods only | pass `{ maxRetries: n }` on that call |
-| headers changed but secret not resolved | `${NAME}` syntax | use `{{ secrets.NAME }}` |
+| `legacy dollar references are not supported` | `${NAME}` or `$NAME` in a header | use `{{ secrets.NAME }}` |
 | `agents.create` result has no variation ID | `Agent` carries only `info.variationCount` | `agents.variations.list(agentId)` |
 
 ## Related skills

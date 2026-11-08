@@ -1,6 +1,6 @@
 ---
 name: cadenya
-description: Build, run, and manage AI agents on Cadenya, the hosted agent runtime. Use when a task mentions Cadenya, or involves creating Tool Sets (MCP, OpenAPI, HTTP, or Bare), Agents and variations, running or streaming objectives, approving tool calls, memory layers, secrets, webhooks, Widgets, or Cadenya config files. Routes to the Cadenya API, CLI, SDK, and start-without-an-account skills and to the live documentation.
+description: Routes Cadenya work to the right Cadenya skill and documentation page. Use when a task mentions Cadenya, the hosted agent runtime, or involves creating Tool Sets (MCP, OpenAPI, HTTP, or Bare), Agents and variations, running or streaming objectives, approving tool calls, memory layers, secrets, webhooks, Widgets, or Cadenya config files, and no more specific Cadenya skill (API, CLI, SDK, Widgets, start-without-an-account) already covers the task.
 ---
 
 # Cadenya
@@ -19,6 +19,7 @@ Your knowledge of Cadenya's API, CLI, and SDKs may be outdated. **Prefer retriev
 | Go code that uses the Cadenya Go SDK | [cadenya-go-sdk](../cadenya-go-sdk/SKILL.md) |
 | Python code that uses the Cadenya Python SDK | [cadenya-python-sdk](../cadenya-python-sdk/SKILL.md) |
 | Ruby code that uses the Cadenya Ruby SDK | [cadenya-ruby-sdk](../cadenya-ruby-sdk/SKILL.md) |
+| Embedding an Agent in a web app with Widgets and widget sessions | [cadenya-widgets](../cadenya-widgets/SKILL.md) |
 | The user has no Cadenya account or credential yet | [cadenya-start-without-account](../cadenya-start-without-account/SKILL.md) |
 
 ## Where to start
@@ -31,7 +32,7 @@ Your knowledge of Cadenya's API, CLI, and SDKs may be outdated. **Prefer retriev
 ## Guardrails
 
 - Never write an API key into a file that is committed, a command line, or a plugin manifest. Use `CADENYA_API_KEY` or the client's secret store.
-- Reference secrets in Tool Set headers as `{{ secrets.NAME }}`, and create the secret before the Tool Set that uses it.
+- Reference secrets in Tool Set headers as `{{ secrets.NAME }}`. Put the value in a workspace secret or the Tool Set's `spec.secrets`, never in the header itself.
 - Objectives require a published Agent. Tools are assigned to variations, not to Agents.
 - Confirm the workspace before you create, update, or delete anything.
 

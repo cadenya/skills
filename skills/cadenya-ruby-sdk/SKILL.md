@@ -45,7 +45,7 @@ An argument passed explicitly but blank raises `ArgumentError` instead of fallin
 
 ## Resources and method names
 
-Method = operation verb with the resource words removed, snake_case; `Get` is `retrieve`. The resource's own ID is positional, parent IDs first for nested resources; body and query fields are keyword arguments. Every method also accepts `workspace_id:` and `request_options:` (allowed keys `headers`, `timeout`, `max_retries`, `reconnect`; anything else raises), even though the gem's `api.md` omits it from signatures.
+Method = operation verb with the resource words removed, snake_case; `Get` is `retrieve`. The resource's own ID is positional, parent IDs first for nested resources; body and query fields are keyword arguments. Workspace-scoped methods take `workspace_id:`. Every method also accepts `request_options:` (allowed keys `headers`, `timeout`, `max_retries`, `reconnect`; anything else raises), which the gem's `api.md` omits from signatures.
 
 ```ruby
 client.agents.retrieve(id)
@@ -58,20 +58,24 @@ client.objectives.continue(objective_id, message: "…")
 | --- | --- |
 | `accounts` | `retrieve`, `rotate_challenge_token`, `rotate_webhook_signing_key` |
 | `profiles` | `whoami` |
-| `workspaces` | `list` |
+| `workspaces` | `list`, `retrieve_temporary` |
+| `trusted_endpoints` | `list`, `create`, `retrieve`, `delete`, `verify` (account level) |
 | `workspace_admin` | `list_account`, `create`, `retrieve`, `update`, `archive`, `list_members`, `add_member`, `remove_member`, `list_profiles` |
 | `api_keys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `add_workspace`, `remove_workspace` (account keys) |
-| `ai_provider_keys`, `models` | CRUD; `models.enable`, `models.disable`, `models.swap_on_variations` |
+| `ai_provider_keys` | CRUD |
+| `models` | `list`, `create`, `retrieve`, `update`, `enable`, `disable`, `swap_on_variations` (no `delete`) |
 | `tool_sets` | `list`, `create`, `retrieve`, `update`, `delete`, `archive`, `unarchive`, `list_events`, `list_usage`, `retrieve_open_api_spec` |
 | `tool_sets.tools` | `list`, `create`, `retrieve`, `update`, `delete`, `omit`, `restore` |
 | `tool_sets.secrets`, `workspace_secrets` | `list`, `create`, `retrieve`, `update`, `delete` |
 | `agents` | `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `unpublish`, `archive`, `unarchive`, `list_feedback`, `list_webhook_deliveries` |
 | `agents.variations` | `list`, `create`, `retrieve`, `update`, `delete`, `add_assignment`, `remove_assignment`, `add_memory_layer`, `update_memory_layer`, `remove_memory_layer` |
 | `agents.schedules` | CRUD, `pause`, `resume`, `archive` |
-| `objectives` | `list`, `create`, `retrieve`, `list_events`, `stream_events`, `continue`, `cancel`, `compact`, `list_tool_calls`, `retrieve_tool_call`, `approve_tool_call`, `deny_tool_call`, `set_tool_call_content`, `list_tools`, `list_context_windows`, `retrieve_diagnostics`, `list_feedback`, `create_feedback` |
+| `agent_pools` | CRUD, `activate`, `deactivate`, `archive`, `unarchive` |
+| `objectives` | `list`, `create`, `create_and_stream`, `retrieve`, `list_events`, `stream_events`, `continue`, `interrupt`, `cancel`, `compact`, `list_queued_actions`, `remove_queued_action`, `list_tool_calls`, `retrieve_tool_call`, `approve_tool_call`, `deny_tool_call`, `set_tool_call_content`, `list_tools`, `list_context_windows`, `retrieve_diagnostics`, `list_feedback`, `create_feedback` |
 | `memory_layers`, `memory_layers.entries` | CRUD |
 | `tenants` | `list`, `retrieve`, `delete`, `list_subjects` |
-| `widgets`, `widget_sessions` | CRUD; `widget_sessions.revoke`, `widget_sessions.delete_tenant` |
+| `widgets` | CRUD, `archive`, `unarchive` |
+| `widget_sessions` | `list`, `create`, `retrieve`, `delete`, `revoke`, `delete_tenant` |
 | `uploads` | `create`, `retrieve` |
 | `tool_search` | `search_or_sets` |
 
@@ -94,7 +98,7 @@ tool_set = client.tool_sets.create(
   } } }
 )
 
-# Agent plus its default variation in one call. variation_selection_mode is required.
+# Agent plus its default variation in one call. variation_selection_mode defaults to VARIATION_SELECTION_MODE_WEIGHTED.
 agent = client.agents.create(
   metadata: { name: "Support Triager", external_id: "support-triager" },
   spec: { variation_selection_mode: "VARIATION_SELECTION_MODE_RANDOM" },
@@ -102,13 +106,13 @@ agent = client.agents.create(
     metadata: { name: "default", external_id: "support-triager-default" },
     spec: {
       system_prompt_template: "You triage support tickets for {{ system_prompt_data.customer_name }}.",
-      model_config: { model_id: "getting-started-key.claude-opus-5" }, # "<provider-key-slug>.<model-slug>" or model_…
+      model_config: { model_id: "getting-started-key.anthropic-claude-sonnet-latest" }, # "<provider-key-slug>.<model-slug>" or model_…
       constraints: { max_tool_calls: 20, inactivity_timeout: "3600s" } # durations are strings
     }
   }
 )
 
-# Assignment: the one union-typed body, passed as body:. Tools attach to variations, not agents.
+# Assignments: add_assignment and remove_assignment take their union body as body:. Tools attach to variations, not agents.
 client.agents.variations.add_assignment(
   agent.metadata.id, variation_id,
   body: { type: "toolSetId", tool_set_id: tool_set.metadata.id }
@@ -123,7 +127,7 @@ objective = client.objectives.create(
 )
 ```
 
-Other adapters: `{ type: "openapi", openapi: { type: "url", url: ... } }` (or `{ type: "uploadId", upload_id: ... }`), `{ type: "http", http: { base_url: ... } }`, `{ type: "bare", bare: {} }`. Doc comments inside the package that mention `${SECRET_NAME}` are stale; the server accepts only `{{ secrets.NAME }}`. Create a secret before the tool set that references it: the create performs a live sync with those headers.
+Other adapters: `{ type: "openapi", openapi: { type: "url", url: ... } }` (or `{ type: "uploadId", upload_id: ... }`), `{ type: "http", http: { base_url: ... } }`, `{ type: "bare", bare: {} }`. The server rejects `${NAME}` (`legacy dollar references are not supported`), even where API doc comments still show it; write `{{ secrets.NAME }}`. Create the secret before the tool set: the create loads the source live with the resolved headers and fails if it is unreachable or lists no tools, and a header naming a secret that does not exist yet skips that check, so mistakes surface later at sync.
 
 Responses are typed objects with snake_case readers and `to_h`: `agent.metadata.external_id`, `objective.state`, `event.data.type`. Enums are strings (`"STATE_PUBLISHED"`); timestamps are `Time`.
 
@@ -148,7 +152,7 @@ client.agents.update(agent_id, metadata: { name: "Support Triager v2" }, update_
 
 | Class | When | Readers |
 | --- | --- | --- |
-| `Cadenya::APIError` | any non-2xx after retries | `status_code`, `code` (google.rpc), `message`, `details` |
+| `Cadenya::APIError` | 4xx/5xx after retries | `status_code`, `code` (google.rpc), `message`, `details` |
 | `Cadenya::APIConnectionError` | transport failure | |
 | `Cadenya::APIResponseError` | 2xx with empty, `null`, or malformed JSON; unfollowed redirect | `status_code`, `body` |
 
@@ -174,22 +178,14 @@ Retries default to 0 and only ever apply to GET/HEAD/PUT/DELETE (408, 409, 429, 
 Semantics you must code around:
 
 - `stream_events` without `last_event_id:` delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live.
-- The server never closes the stream. Call `stream.close` when you see a terminal event (`finalized`, `error`, `cancelled`, `timedOut`); `each` then returns cleanly.
-- An `assistantMessage` with empty `tool_calls` ends the turn; the objective is `STATE_WAITING` until you `continue` it or the inactivity timeout fires.
+- `stream_events` never ends on its own. Call `stream.close` when you see a terminal event (`finalized`, `error`, `cancelled`, `timedOut`); `each` then returns cleanly.
+- An `assistantMessage` with empty `tool_calls` ends the turn; the objective is `OBJECTIVE_STATE_WAITING` until you `continue` it or the inactivity timeout fires.
 - A stream is single-use (`stream already consumed`). Mid-stream transport drops reconnect from `stream.last_event_id` (5 attempts per outage); `request_options: { reconnect: false }` surfaces them as `APIConnectionError` so you can resume yourself.
 - A replayed `toolApprovalRequested` for a call you already approved makes the approve call fail with 400 (code 9, not waiting for approval); treat that as already handled.
-- A clean end of stream (load balancers cut connections after about 10 minutes) returns from `each` with no terminal event and no reconnect. Track `event.metadata.id` as your checkpoint (`stream.last_event_id` stays `nil` until an event with an ID arrives) and reopen from it in an outer loop until you have seen a terminal event.
+- A clean end of stream (load balancers cut connections after about 10 minutes) returns from `each` with no terminal event and no reconnect. Checkpoint on `stream.last_event_id` and reopen from it in an outer loop until you have seen a terminal event. Not on `event.metadata.id`: `heartbeat` events (`hb_…`) and deltas (`dlt_…`, with `include_deltas: true`) carry IDs the server will not accept as a resume cursor; only durable `objevt_…` IDs advance `stream.last_event_id`.
 
 ```ruby
-last_event_id = nil
-client.objectives.list_events(objective_id, sort_order: "asc").each do |event|
-  handle(event); last_event_id = event.metadata.id
-end
-
-stream = client.objectives.stream_events(objective_id, last_event_id: last_event_id)
-stream.each { |event| stream.close if handle(event) }
-
-def handle(event)                                  # true when the turn or objective is over
+handle = lambda do |event|                         # true when the turn or objective is over
   data = event.data                                # discriminated on data.type; payload sits under the snake_case key
   case data.type
   when "toolApprovalRequested"
@@ -202,10 +198,20 @@ def handle(event)                                  # true when the turn or objec
     puts data.finalized.output.inspect
     true
   when "error", "cancelled", "timedOut" then true
-  else false
+  else false                                       # heartbeat, toolCalled, stateChanged, ...
   end
 end
+
+last_event_id = nil
+client.objectives.list_events(objective_id, sort_order: "asc").each do |event|
+  handle.(event); last_event_id = event.metadata.id
+end
+
+stream = client.objectives.stream_events(objective_id, last_event_id: last_event_id)
+stream.each { |event| stream.close if handle.(event) }
 ```
+
+To start an objective and watch it in one request, use `create_and_stream` (same arguments as `create`, plus `include_deltas:`; `metadata: { external_id: }` is required and makes retries attach to the same objective). Each item has `type` `"objective"` (first, `item.objective`) or `"event"` (`item.event`, the same event as above), and the server ends this stream itself once the objective is waiting or terminal.
 
 `stream.each_event` yields `Cadenya::ServerSentEvent` envelopes (`event`, `data`, `id`); `stream.last_event_id` is the resume checkpoint. Housekeeping frames (`open`, `ping`) are skipped. `close` is safe from another thread and unblocks a parked read.
 
@@ -213,7 +219,9 @@ end
 
 ```ruby
 # Rails: request.raw_post is the untouched body; a re-serialized body fails verification.
-event = client.unwrap_webhook(request.raw_post, request.headers)   # uses webhook_secret / CADENYA_WEBHOOK_SECRET
+# Pass a plain hash: ActionDispatch's request.headers enumerates CGI keys (HTTP_WEBHOOK_ID) and fails.
+headers = %w[webhook-id webhook-timestamp webhook-signature].to_h { |h| [h, request.headers[h]] }
+event = client.unwrap_webhook(request.raw_post, headers)   # uses webhook_secret / CADENYA_WEBHOOK_SECRET
 # event.type is "objective_event.tool_approval_requested" etc.; event.data.objective.id is the objective,
 # event.data.objective_event.data.type the event kind (same union as the stream)
 ```
@@ -230,9 +238,9 @@ No built-in logger. Pass `connection:` with Faraday's logger middleware (and a `
 client = Cadenya::Client.new(workspace_id: "development")
 
 client.workspace_secrets.create(metadata: { name: "MCP_TOKEN" }, spec: { value: ENV.fetch("MCP_TOKEN") })
-# … tool_set and agent as in "Request bodies" …
-
 model = client.models.list(prefix: "claude", state: "STATE_ENABLED", limit: 1).items.first or raise "no enabled model matches"
+# … tool_set and agent as in "Request bodies", with model_config: { model_id: model.metadata.id } …
+
 variation = client.agents.variations.list(agent.metadata.id, limit: 1).items.first   # create returns the agent only
 client.agents.variations.add_assignment(agent.metadata.id, variation.metadata.id,
                                         body: { type: "toolSetId", tool_set_id: tool_set.metadata.id })
@@ -253,7 +261,7 @@ client.objectives.continue(objective.metadata.id, message: "Which one is most ur
 | `missing workspaceId` | no client default and no `workspace_id:` | `CADENYA_WORKSPACE_ID`, `workspace_id:` on the client, or per call |
 | 400 `agent must be published to create an objective` | agent is `STATE_DRAFT` | `client.agents.publish(id)` |
 | 400 on `spec.model_config.model_id` | wrong `model_id` form | `model_…` from `models.list`, or `<provider-key-slug>.<model-slug>` |
-| 429 creating a second variation | default plan allows 1 variation per agent | use `default_variation:`; update it |
+| 429 creating a variation | the plan caps non-archived variations across the whole account, every workspace included | archive unused variations, or update the existing one |
 | stream yields nothing for a finished objective | no `last_event_id:` | replay with `list_events(sort_order: "asc")`, then stream from the last ID |
 | `stream already consumed` | iterated a stream twice | open a new one with `last_event_id: stream.last_event_id` |
 | `each` never returns | the server keeps the stream open | `stream.close` on terminal events |
@@ -261,7 +269,7 @@ client.objectives.continue(objective.metadata.id, message: "Which one is most ur
 | `ArgumentError: unknown request_options key` | typo in `request_options:` | only `headers`, `timeout`, `max_retries`, `reconnect` |
 | POST silently not retried | retries apply to idempotent methods only | `request_options: { max_retries: n }` |
 | header secret not resolved | `${NAME}` syntax | use `{{ secrets.NAME }}` |
-| `agents.create` result has no variation ID | `Agent#info` only has `variation_count` | `agents.variations.list(agent_id)` |
+| `agents.create` result has no variation ID | `Agent#info` has `variation_count`, not IDs | `agents.variations.list(agent_id)` |
 
 ## Related skills
 

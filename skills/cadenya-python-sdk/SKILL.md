@@ -47,7 +47,7 @@ An argument passed explicitly but blank raises `ValueError` instead of falling b
 
 ## Resources and method names
 
-Method = operation verb with the resource words removed, snake_case; `Get` is `retrieve`; the Python keyword `continue` becomes `continue_`. The resource's own ID is positional, parent IDs first for nested resources, and every body or query field is a keyword argument. Every method also accepts `workspace_id=` and `request_options=` (the package's `api.md` omits `request_options` from signatures; it is there).
+Method = operation verb with the resource words removed, snake_case; `Get` is `retrieve`; the Python keyword `continue` becomes `continue_`. The resource's own ID is positional, parent IDs first for nested resources, and every body or query field is a keyword argument. Workspace-scoped methods also accept `workspace_id=`, and every method accepts `request_options=` (the package's `api.md` omits it from signatures; it is there).
 
 ```python
 client.agents.retrieve(id)
@@ -70,10 +70,12 @@ client.objectives.continue_(objective_id, message="…")
 | `agents` | `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `unpublish`, `archive`, `unarchive`, `list_feedback`, `list_webhook_deliveries` |
 | `agents.variations` | `list`, `create`, `retrieve`, `update`, `delete`, `add_assignment`, `remove_assignment`, `add_memory_layer`, `update_memory_layer`, `remove_memory_layer` |
 | `agents.schedules` | CRUD, `pause`, `resume`, `archive` |
-| `objectives` | `list`, `create`, `retrieve`, `list_events`, `stream_events`, `continue_`, `cancel`, `compact`, `list_tool_calls`, `retrieve_tool_call`, `approve_tool_call`, `deny_tool_call`, `set_tool_call_content`, `list_tools`, `list_context_windows`, `retrieve_diagnostics`, `list_feedback`, `create_feedback` |
+| `agent_pools` | CRUD, `activate`, `deactivate`, `archive`, `unarchive` |
+| `objectives` | `list`, `create`, `retrieve`, `list_events`, `stream_events`, `continue_`, `cancel`, `compact`, `list_tool_calls`, `retrieve_tool_call`, `approve_tool_call`, `deny_tool_call`, `set_tool_call_content`, `list_tools`, `list_context_windows`, `retrieve_diagnostics`, `list_feedback`, `create_feedback`, `create_and_stream`, `interrupt`, `list_queued_actions`, `remove_queued_action` |
 | `memory_layers`, `memory_layers.entries` | CRUD |
 | `tenants` | `list`, `retrieve`, `delete`, `list_subjects` |
-| `widgets`, `widget_sessions` | CRUD; `widget_sessions.revoke`, `widget_sessions.delete_tenant` |
+| `widgets`, `widget_sessions` | CRUD; `widgets.archive`, `widgets.unarchive`, `widget_sessions.revoke`, `widget_sessions.delete_tenant` |
+| `trusted_endpoints` | `list`, `create`, `retrieve`, `delete`, `verify` |
 | `uploads` | `create`, `retrieve` |
 | `tool_search` | `search_or_sets` |
 
@@ -83,7 +85,7 @@ Body fields are keyword arguments (`metadata=`, `spec=`, `default_variation=`, `
 
 - **Write snake_case keys.** The SDK translates known keys to wire names (`system_prompt_template` → `systemPromptTemplate`); camelCase keys pass through too, but supplying both spellings of one field raises. Your own data inside free-form fields (`system_prompt_data`, `headers`, `labels`, `parameters`, `output_definition`) is never rewritten.
 - Unions carry a `type` tag naming the populated key: `{"type": "mcp", "mcp": {...}}`, `{"type": "toolSetId", "tool_set_id": "..."}`. Tag values stay camelCase.
-- Read-only keys on request types are dropped silently, so a fetched object's `to_dict`-style data can be edited and sent back. `None` keyword arguments are omitted; a `None` inside a dict is sent as JSON `null`.
+- Server-owned keys on some request types (`agent_id` inside `default_variation`, an API key spec's `token`) are dropped silently; unknown keys pass through as written. `None` keyword arguments are omitted; a `None` inside a dict is sent as JSON `null`.
 
 ```python
 # Tool set. Secrets interpolate as {{ secrets.NAME }} (workspace or tool set secret).
@@ -104,7 +106,7 @@ agent = client.agents.create(
         "metadata": {"name": "default", "external_id": "support-triager-default"},
         "spec": {
             "system_prompt_template": "You triage support tickets for {{ system_prompt_data.customer_name }}.",
-            "model_config": {"model_id": "getting-started-key.claude-opus-5"},  # "<provider-key-slug>.<model-slug>" or model_…
+            "model_config": {"model_id": "getting-started-key.anthropic-claude-sonnet-latest"},  # "<provider-key-slug>.<model-slug>" or model_…
             "constraints": {"max_tool_calls": 20, "inactivity_timeout": "3600s"},  # durations are strings
         },
     },
@@ -125,7 +127,7 @@ objective = client.objectives.create(
 )
 ```
 
-Other adapters: `{"type": "openapi", "openapi": {"type": "url", "url": ...}}` (or `{"type": "uploadId", "upload_id": ...}`), `{"type": "http", "http": {"base_url": ...}}`, `{"type": "bare", "bare": {}}`. Doc comments inside the package that mention `${SECRET_NAME}` are stale; the server accepts only `{{ secrets.NAME }}`. Create a secret before the tool set that references it: the create performs a live sync with those headers.
+Other adapters: `{"type": "openapi", "openapi": {"type": "url", "url": ...}}` (or `{"type": "uploadId", "upload_id": ...}`), `{"type": "http", "http": {"base_url": ...}}`, `{"type": "bare", "bare": {}}`. The server rejects `${NAME}` and `$NAME` references (`legacy dollar references are not supported; use {{ secrets.SECRET_NAME }}`). Create a secret before the tool set that references it: the create resolves those headers and validates the source live, rejecting one that is unreachable or lists no tools. A header naming a secret that does not exist yet skips that check.
 
 Responses are dataclasses with snake_case attributes: `agent.metadata.external_id`, `objective.state`, `event.data.type`. Enums are plain strings (`"STATE_PUBLISHED"`); timestamps are `datetime`.
 
@@ -168,7 +170,7 @@ Timeouts surface as `httpx` exceptions from the underlying client.
 
 ## Retries and per-request options
 
-`RequestOptions(headers=None, timeout=None, max_retries=None, reconnect=None)`, passed as `request_options=`. Retries default to 0 and only ever apply to GET/HEAD/PUT/DELETE (408, 409, 429, 5xx, transport errors), honoring `Retry-After`. `max_retries` on the client enables them; `RequestOptions(max_retries=n)` on a single call opts a POST or PATCH in.
+`RequestOptions(headers=None, timeout=None, max_retries=None, reconnect=None)`, passed as `request_options=`. Retries default to 0 and only ever apply to GET/HEAD/PUT/DELETE (408, 409, 429, 500, 502, 503, 504, transport errors), honoring `Retry-After`. `max_retries` on the client enables them; `RequestOptions(max_retries=n)` on a single call opts a POST or PATCH in.
 
 ## Streaming objective events
 
@@ -176,25 +178,20 @@ Semantics you must code around:
 
 - `stream_events` without `last_event_id` delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live.
 - The server never closes the stream. Break on a terminal event (`finalized`, `error`, `cancelled`, `timedOut`); leaving the `with` block closes it.
-- An `assistantMessage` with empty `tool_calls` ends the turn; the objective is `STATE_WAITING` until you `continue_` it or the inactivity timeout fires.
+- An `assistantMessage` with empty `tool_calls` ends the turn; the objective is `OBJECTIVE_STATE_WAITING` until you `continue_` it or the inactivity timeout fires.
 - A stream is single-use (`stream already consumed`). Mid-stream transport drops reconnect from `stream.last_event_id` (5 attempts per outage); `RequestOptions(reconnect=False)` surfaces them as `APIConnectionError` so you can resume yourself.
 - A replayed `toolApprovalRequested` for a call you already approved makes the approve call fail with 400 (code 9, not waiting for approval); treat that as already handled.
-- A clean end of stream (load balancers cut connections after about 10 minutes) ends the `for` loop with no terminal event and no reconnect. Track `event.metadata.id` as your checkpoint (`stream.last_event_id` stays `None` until an event with an ID arrives) and reopen from it in an outer loop until you have seen a terminal event.
+- A clean end of stream (load balancers cut connections after about 10 minutes) ends the `for` loop with no terminal event and no reconnect. Reopen from `stream.last_event_id` in an outer loop until you have seen a terminal event.
+- Resume from `stream.last_event_id`, never from `event.metadata.id`. Live-only `heartbeat` events (and deltas, with `include_deltas=True`) carry `hb_`/`dlt_` IDs, and resuming from one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.last_event_id` starts at the ID you passed and advances only on persisted events. History from `list_events` holds persisted events only.
 
 ```python
-last_event_id = None
-for event in client.objectives.list_events(objective_id, sort_order="asc"):
-    handle(event); last_event_id = event.metadata.id
-
-with client.objectives.stream_events(objective_id, last_event_id=last_event_id) as stream:
-    for event in stream:
-        if handle(event):
-            break
-
 def handle(event) -> bool:
     data = event.data                           # discriminated on data.type; payload sits under the snake_case key
     if data.type == "toolApprovalRequested":
-        client.objectives.approve_tool_call(objective_id, data.tool_approval_requested.tool_call_id)
+        try:
+            client.objectives.approve_tool_call(objective_id, data.tool_approval_requested.tool_call_id)
+        except APIError as e:
+            if e.code != 9: raise               # 9: already approved or denied (a replayed request)
     elif data.type == "assistantMessage":
         if data.assistant_message.content:
             print(data.assistant_message.content)
@@ -203,8 +200,23 @@ def handle(event) -> bool:
         print(data.finalized.output); return True
     elif data.type in ("error", "cancelled", "timedOut"):
         return True
-    return False
+    return False                                # heartbeat, stateChanged, etc.
+
+last_event_id = None
+for event in client.objectives.list_events(objective_id, sort_order="asc"):
+    handle(event); last_event_id = event.metadata.id
+
+done = False
+while not done:
+    with client.objectives.stream_events(objective_id, last_event_id=last_event_id) as stream:
+        for event in stream:
+            if handle(event):
+                done = True
+                break
+        last_event_id = stream.last_event_id
 ```
+
+To start an objective and watch it on one connection, use `client.objectives.create_and_stream(agent_id=..., metadata={"external_id": ...}, ...)`. `metadata.external_id` is required and is the idempotency key, so the SDK's reconnect re-POST attaches to the same objective. The first item is `type == "objective"` (`.objective`); every later item is `type == "event"` (`.event`, an `ObjectiveEvent`). Unlike `stream_events`, this stream ends on its own once the objective settles (waiting, finalized, failed, cancelled, or timed out).
 
 `stream.events()` yields `ServerSentEvent(event, data, id)` envelopes; `stream.last_event_id` is the resume checkpoint. Housekeeping frames (`open`, `ping`) are skipped.
 
@@ -218,7 +230,7 @@ event = client.unwrap_webhook(request.get_data(), request.headers)   # raw bytes
 # event.data.objective_event.data.type the event kind (same union as the stream)
 ```
 
-Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, secret `whsec_…` (the account's `webhookEventsHmacSecret`), 5-minute tolerance (`tolerance_seconds=`). `verify_webhook(secret, payload, headers)` checks without decoding; failures raise `WebhookVerificationError`. Pass the raw body, not a re-serialized one.
+Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, secret `whsec_…` (`client.accounts.retrieve().info.webhook_events_hmac_secret`), 5-minute tolerance (`tolerance_seconds=`). `verify_webhook(secret, payload, headers)` checks without decoding; failures raise `WebhookVerificationError`. Pass the raw body, not a re-serialized one.
 
 ## Logging and raw responses
 
@@ -232,9 +244,8 @@ from cadenya import Cadenya
 
 with Cadenya(workspace_id="development") as client:
     client.workspace_secrets.create(metadata={"name": "MCP_TOKEN"}, spec={"value": os.environ["MCP_TOKEN"]})
-    # … tool_set and agent as in "Request bodies" …
-
-    model = next(iter(client.models.list(prefix="claude", state="STATE_ENABLED", limit=1)))   # StopIteration when nothing matches
+    model = next(iter(client.models.list(query="claude", state="STATE_ENABLED", limit=1)))   # name match; StopIteration when none
+    # … tool_set and agent as in "Request bodies", with model_config={"model_id": model.metadata.id} …
     variation = client.agents.variations.list(agent.metadata.id, limit=1).items[0]   # create returns the agent only
     client.agents.variations.add_assignment(agent.metadata.id, variation.metadata.id,
                                             body={"type": "toolSetId", "tool_set_id": tool_set.metadata.id})
@@ -255,13 +266,14 @@ with Cadenya(workspace_id="development") as client:
 | `missing workspaceId` | no client default and no `workspace_id=` | `CADENYA_WORKSPACE_ID`, `workspace_id` on the client, or per call |
 | 400 `agent must be published to create an objective` | agent is `STATE_DRAFT` | `client.agents.publish(id)` |
 | 400 on `spec.model_config.model_id` | wrong `model_id` form | `model_…` from `models.list`, or `<provider-key-slug>.<model-slug>` |
-| 429 creating a second variation | default plan allows 1 variation per agent | use `default_variation`; update it |
+| 429 creating an agent or variation | plan limit on non-archived variations, counted across the account (`ENTITLEMENT_LIMIT_REACHED`; details carry `feature`, `limit`, `usage`) | delete unused variations or upgrade the plan |
 | stream yields nothing for a finished objective | no `last_event_id` | replay with `list_events(sort_order="asc")`, then stream from the last ID |
 | `stream already consumed` | iterated a stream twice | open a new one with `last_event_id=stream.last_event_id` |
+| 400 `Last-Event-ID must be a persisted objevt_ event ID` | resumed from a heartbeat's `hb_` ID | resume from `stream.last_event_id` |
 | stream loop never ends | the server keeps it open | `break` on terminal events |
 | POST silently not retried | retries apply to idempotent methods only | `RequestOptions(max_retries=n)` on that call |
 | `TypeError: request_options must be a RequestOptions instance` | passed a dict | `from cadenya import RequestOptions` |
-| header secret not resolved | `${NAME}` syntax | use `{{ secrets.NAME }}` |
+| tool set create fails with `legacy dollar references are not supported` | `${NAME}` in a header | use `{{ secrets.NAME }}` |
 | `agents.create` result has no variation ID | `Agent.info` only has `variation_count` | `agents.variations.list(agent_id)` |
 | `continue` is a syntax error | Python keyword | `client.objectives.continue_(...)` |
 

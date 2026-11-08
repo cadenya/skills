@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya Widgets"
+  short_description: "Embed a Cadenya Agent in a web app with Widgets"
+  default_prompt: "Use $cadenya-widgets to embed a Cadenya Agent in my web app with a Widget and Widget Sessions."

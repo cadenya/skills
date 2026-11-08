@@ -1,6 +1,6 @@
 ---
 name: cadenya-start-without-account
-description: Get a working Cadenya workspace for a user who has no Cadenya account, with no signup step. The CLI creates a temporary workspace and API key and returns a claim URL; the user opens it to keep the workspace, and an unclaimed workspace is permanently deleted 24 hours after creation. Use when a task needs Cadenya and `cadenya whoami` fails or no Cadenya credential exists, when the user says they don't have an account yet, on a `REQUIRES_CLAIM` or `TEMPORARY_WORKSPACE_CLAIMED` error, or on a question about a claim link.
+description: Gets a working Cadenya workspace for a user who has no Cadenya account, with no signup step. The CLI creates a temporary workspace and API key and returns a claim URL; the user opens it to keep the workspace, and an unclaimed workspace is permanently deleted 24 hours after creation. Use when a task needs Cadenya and `cadenya whoami` fails or no Cadenya credential exists, when the user says they don't have an account yet, on a `REQUIRES_CLAIM` or `TEMPORARY_WORKSPACE_CLAIMED` error, or on a question about a claim link. Not for a user who already has an account or API key; use cadenya-cli.
 ---
 
 # Start with Cadenya without an account
@@ -12,7 +12,7 @@ A user without a Cadenya account can still have you build with Cadenya. One comm
 What the user needs to know:
 
 - **24 hours.** A workspace nobody claims is permanently deleted 24 hours after it was created, with its agents, tool sets, objectives and secrets. It can't be recovered.
-- **Only a demo model until claimed.** A temporary workspace has no Cadenya-provided model and no model credit. A free demo model shows the agent loop with scripted output. For real model output before claiming, the user adds their own provider key. Claiming adds Cadenya's promotional model credit.
+- **Only a demo model until claimed.** A temporary workspace has no Cadenya-provided model and no model credit. A free demo model shows the agent loop with scripted output. For real model output before claiming, the user adds their own provider key. Claiming adds Cadenya's promotional model credit (the create output's `nextStep` states the amount).
 - **The claim URL is a secret.** Whoever opens it and signs in becomes the owner of the workspace.
 - **Claiming needs a person without a Cadenya account.** Someone who already has one gets refused, and should use their own account instead.
 
@@ -29,10 +29,10 @@ cadenya auth status             # names the credential source in effect; always 
 - **`whoami` exits 0 and `auth status` names a stored login or `$CADENYA_API_KEY`:** the user already has an account. Don't create a temporary workspace; follow `cadenya-cli`. `--temporary` refuses to run while such a credential is configured.
 - **`whoami` exits 0 and `auth status` names `temporary workspace … (.cadenya/temporary.json)`:** this directory already has a live temporary workspace. Run the create command below anyway: it returns that workspace with `"reused": true` and creates nothing, which gives you the claim URL and deadline to re-share.
 
-Install the CLI if needed:
+Temporary workspaces need CLI 1.12.0 or later; older versions have no `workspaces create`. Check `cadenya --version`, and install or upgrade if needed:
 
 ```sh
-brew install cadenya/tools/cadenya    # macOS/Linux; Windows: choco install cadenya
+brew install cadenya/tools/cadenya    # or: brew upgrade cadenya; Windows: choco install cadenya
 ```
 
 ## Create the temporary workspace
@@ -71,8 +71,8 @@ First, decide where your reply goes. If anyone besides the user can read it (a P
 You can create tool sets, agents and variations, publish agents and run objectives. Some things wait for the claim, and small caps apply to the rest.
 
 - **Tool set hosts.** Tool sets only reach hosts on the account's trusted endpoints, and `cadenya trusted-endpoints create` fails before the claim. Before the claim, tool sets can call Cadenya-hosted endpoints such as the Faker MCP server at `https://free.cadenya.com/faker-mcp`, and Bare tool sets (`--adapter bare`) work because your application supplies each result. An HTTP, OpenAPI or MCP tool set pointed at any other host is refused at call time until the user claims and trusts the host.
-- **Needs a claim:** widgets, memory layers, agent pools, workspace members, more API keys, tool set templates and more workspaces. These return `REQUIRES_CLAIM`. The temporary key also lacks some scopes (trusted endpoints, for one), which fail with HTTP 403 and a missing-scope message instead; treat that the same way.
-- **Capped:** agents, variations, tool sets, provider keys, objectives, uploads and loops per month. Going past a cap also returns `REQUIRES_CLAIM`.
+- **Needs a claim:** Widgets, widget sessions, tenants, memory layers, agent pools, trusted endpoints, API keys, and workspace administration (members, more workspaces). The temporary key has no scope for these, so they fail with HTTP 403 `SCOPE_MISSING` (`caller does not hold the "…" scope required by this endpoint`). Treat that like `REQUIRES_CLAIM`, and leave Widgets and memory layers out of `.cadenya/` config files until the claim, or `cadenya config apply` fails.
+- **Capped:** agents, variations, tool sets, provider keys, objectives, uploads and loops per month. Going past a cap returns `REQUIRES_CLAIM`, with `limit` and `usage` in the error metadata.
 
 ## Running objectives before the claim
 
@@ -80,7 +80,7 @@ Before you run an objective, ask the user which option they want:
 
 1. **Use the demo model.** It's the default model in a temporary workspace and costs nothing. It doesn't reason. When the variation has a read-only tool assigned (a GET operation, a read-only MCP tool, or a Bare tool, with no approval required), it calls one with made-up arguments, then returns a templated summary of the result. With no such tool, it returns a scripted reply and calls nothing. To show the full loop (tool call, events, completion), assign a read-only tool set first, for example an MCP tool set on the Faker MCP server (`--mcp-url https://free.cadenya.com/faker-mcp`). Tell the user so, and don't present its output as a real model's. Its model ID is `demo.demo` (provider key `demo`, model `demo`; `cadenya models list` also shows the canonical `model_…` ID), for example `--default-variation-model-id demo.demo` on `agents create`.
 2. **Use their own provider key now.** Ask the user to put the key in an environment variable themselves; never ask them to paste it into the chat. Build the command with `cadenya schema ai-provider-keys create`, and pass the key on stdin so it stays off the command line, for example `printf '%s' "$ANTHROPIC_API_KEY" | cadenya ai-provider-keys create --name "Anthropic" --external-id anthropic --provider anthropic --api-key -`. Then `cadenya models list` shows the new models.
-3. **Claim first.** After the claim, the workspace gets Cadenya's promotional model credit and objectives run with no key of their own.
+3. **Claim first.** After the claim, the workspace gets Cadenya's promotional model credit (amount in `nextStep`) and objectives run with no key of their own.
 
 Whichever model you use, publish the agent (`cadenya agents publish <agent>`) before you create an objective. The `cadenya-cli` skill covers building and running.
 
@@ -101,10 +101,10 @@ cadenya workspaces claim-status --wait           # blocks until claimed or expir
 | HTTP 429 on create, "too many temporary workspaces were created from this network" | This network holds the most live temporary workspaces allowed, or created too many too fast | Tell the user, and stop. They can claim a workspace they already have a link for (that frees a slot), wait for one to expire, or sign up and use `cadenya auth login`. Don't retry in a loop, and never work around it |
 | `ACCOUNT_PROVISIONING` | The new workspace is still being set up | Retry after the delay the error gives (a few seconds), at most three times. If it still fails, tell the user and stop |
 | HTTP 503 on create, "temporary workspaces are unavailable right now" (`PROVISIONING_DISABLED`) | Creating temporary workspaces is switched off | Tell the user. Don't retry in a loop. Offer signup at https://app.cadenya.com/signup followed by `cadenya auth login` |
-| `TEMPORARY_WORKSPACE_EXPIRED`, `state: STATE_EXPIRED`, or a rejected credential after `expiresAt` | The workspace was deleted | Tell the user what was lost. Create a new one only if they want it |
+| `TEMPORARY_WORKSPACE_EXPIRED`, `state: STATE_EXPIRED`, or `missing credentials` / a rejected credential after `expiresAt` (the CLI stops using an expired `.cadenya/temporary.json`) | The workspace was deleted | Tell the user what was lost. Create a new one only if they want it |
 | `--temporary` refused because a credential is configured | The user already has an account | Use `cadenya-cli` with their login |
 | `TEMPORARY_WORKSPACE_CLAIMED` (exit code 3) | The user claimed the workspace, which revoked the temporary key. The CLI removed `.cadenya/temporary.json` | Tell the user it's claimed. Ask them to run `cadenya auth login` in this directory, or to create an API key in the dashboard. Continue with the new credential |
-| `auth login` says "you already have a Cadenya account" | Someone with an account can't claim a temporary workspace | The login still works: create a workspace in their account and rebuild there. The temporary one expires |
+| `auth login` says "you already have a Cadenya account" | Someone with an account can't claim a temporary workspace | If it also printed `Logged in.`, the login works: create a workspace in their account and rebuild there. If it ended with `login refused`, nothing was stored: run `cadenya auth login` from a directory without `.cadenya/temporary.json`, which sends no claim. The temporary workspace expires |
 
 ## After the claim
 
