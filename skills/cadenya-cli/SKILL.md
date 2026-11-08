@@ -47,11 +47,13 @@ brew install cadenya/tools/cadenya    # macOS/Linux; Windows: choco install cade
 cadenya --version                     # binary release plus the API contract it was generated against
 ```
 
-**Credential resolution, first match wins:** `--api-key` flag, then `CADENYA_API_KEY`, then the stored login.
+A person creates the account at https://app.cadenya.com/signup, and the Free plan needs no card. When there is no account yet, give your user that link, then run `cadenya auth login`. To start building before the user signs up, follow the `cadenya-start-without-account` skill: `cadenya workspaces create --temporary` makes a temporary workspace that the user claims later.
 
-- Interactive machines: `cadenya auth login` runs a browser device flow (`--no-browser` prints the URL) and stores the credential in `~/.cadenya/credentials` (mode 0600). You pick which workspaces the login may reach on the approval page.
-- CI and scripts: export `CADENYA_API_KEY` (an account API key assigned to the workspace) and `CADENYA_WORKSPACE_ID`. Never put the key on the command line.
-- `cadenya auth status` names the credential source in effect and lists the workspaces the login can reach; it exits 0 even when that credential is bad. `cadenya whoami` is the pre-flight check that exits 1 on a rejected credential.
+**Credential resolution, first match wins:** `--api-key` flag, then `CADENYA_API_KEY`, then the stored login, then this directory's `.cadenya/temporary.json` (a temporary workspace).
+
+- Interactive machines: `cadenya auth login` runs a browser device flow (`--no-browser` prints the URL) and stores the credential in `~/.cadenya/credentials` (mode 0600). You pick which workspaces the login may reach on the approval page. The command waits until the code is approved, so show your user the approval link.
+- CI and scripts: export `CADENYA_API_KEY` (an account API key from https://app.cadenya.com/account/apiKeys, assigned to the workspaces it reaches) and `CADENYA_WORKSPACE_ID`. Never put the key on the command line.
+- `cadenya auth status` names the credential source in effect and lists the workspaces the login can reach; it exits 0 even when that credential is bad. `cadenya whoami --display json` is the pre-flight check that exits 1 on a rejected credential.
 - `--profile <name>` on any command (including `auth login`) keeps separate logins and stored defaults.
 
 **Workspace resolution, first match wins:** `--workspace-id`, then `CADENYA_WORKSPACE_ID`, then `cadenya config set workspace-id <id>`, then the login's single authorized workspace. Both accept a workspace ID (`workspace_…`) or its external ID (`development`).
@@ -62,6 +64,26 @@ cadenya config set workspace-id development   # per-profile default
 cadenya config list                           # effective values and their sources
 ```
 
+## Workspace configuration files
+
+Keep tool sets, agents, variations, memory layers and widgets in the repository as YAML, one resource per file, and let the CLI make the workspace match:
+
+```text
+cadenya.yaml                    # optional settings: bundleKey, workspaceId
+.cadenya/
+  toolSets/petstore.yaml
+  agents/support.yaml
+  agents/support/default.yaml   # a variation of the support agent
+```
+
+```sh
+cadenya config validate   # local YAML and references, no API calls
+cadenya config plan       # what apply would create, update or delete
+cadenya config apply      # make the workspace match .cadenya/
+```
+
+Every resource gets the label `bundle_key=<bundleKey>`, and apply deletes bundle resources whose file is gone. The format is in the [bundle guide](https://github.com/cadenya/cadenya-cli/blob/main/docs/config-bundles.md), and the [GitHub Action](https://github.com/cadenya/cadenya-config-loader) runs the same commands in CI.
+
 ## Command map
 
 Groups mirror API resources. Nested resources are subgroups (`agents variations`, `tool-sets tools`).
@@ -69,11 +91,12 @@ Groups mirror API resources. Nested resources are subgroups (`agents variations`
 | Group | Commands |
 | --- | --- |
 | `auth` | `login`, `logout`, `status` |
-| `config` | `set`, `get`, `unset`, `list` |
+| `config` | `set`, `get`, `unset`, `list`, `validate`, `plan`, `apply` |
 | `whoami`, `profiles whoami` | the profile behind the credential |
-| `workspaces` | `list` |
+| `workspaces` | `list`, `create --temporary` (a temporary workspace without an account), `claim-status` (`--wait`); see `cadenya-start-without-account` |
 | `workspace-admin` | `list-account`, `create`, `retrieve`, `update`, `archive`, `list-members`, `add-member`, `remove-member`, `list-profiles` (admin role) |
-| `api-keys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `add-workspace`, `remove-workspace` (account-level) |
+| `api-keys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `add-workspace`, `remove-workspace` (account keys) |
+| `trusted-endpoints` | `list`, `create`, `retrieve`, `delete`, `verify` |
 | `ai-provider-keys` | `list`, `create`, `retrieve`, `update`, `delete` |
 | `models` | `list`, `retrieve`, `enable`, `disable`, `swap-on-variations` |
 | `tool-sets` | `list`, `create`, `retrieve`, `update`, `delete`, `archive`, `unarchive`, `list-events`, `list-usage`, `retrieve-open-api-spec` |
@@ -276,6 +299,7 @@ Related reads: `objectives list-tool-calls "$obj" --status TOOL_CALL_STATUS_WAIT
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
+| `cadenya: missing API key: pass WithAPIKey or set CADENYA_API_KEY` | no `--api-key`, no `CADENYA_API_KEY` and no stored login | `cadenya auth login`, or set `CADENYA_API_KEY` to a key from https://app.cadenya.com/account/apiKeys |
 | `invalid authentication token provided (http 403, code 7)`, reason `AUTH_TOKEN_INVALID`, even though `auth login` worked | `CADENYA_API_KEY` (or `--api-key`) is set and overrides the stored login | `cadenya auth status` shows the source; unset the variable or pass the right key |
 | `admin role required (http 403, code 7)`, reason `ADMIN_ROLE_REQUIRED` | `workspace-admin` commands need the account admin role | use an admin profile, or the non-admin `workspaces list` |
 | `not found (http 404, code 5)` on a resource you can see in the UI | wrong workspace, or an external ID that was never set | check `cadenya config list`; pass `--workspace-id`; use `external_id:` |
@@ -290,5 +314,6 @@ Related reads: `objectives list-tool-calls "$obj" --status TOOL_CALL_STATUS_WAIT
 
 ## Related skills
 
+- `cadenya-start-without-account`: a temporary workspace for a user with no account, its claim URL, and the errors around claiming.
 - `cadenya-api`: wire-level conventions (IDs, field masks, errors, pagination, streaming, webhooks) and per-resource request shapes.
-- `cadenya-typescript-sdk`: the same operations from code; the Go, Python, and Ruby SDKs ([cadenya-go](https://github.com/cadenya/cadenya-go), [cadenya-python](https://github.com/cadenya/cadenya-python), [cadenya-ruby](https://github.com/cadenya/cadenya-ruby)) are generated from the same API contract.
+- `cadenya-typescript-sdk`, `cadenya-go-sdk`, `cadenya-python-sdk`, `cadenya-ruby-sdk`: the same operations from code.

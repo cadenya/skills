@@ -69,6 +69,10 @@ Skills are contextual and auto-loaded based on your conversation. When a request
 | [cadenya-api](skills/cadenya-api/SKILL.md) | Wire conventions shared by every client: IDs and external IDs, field masks, pagination, errors, event streams, webhooks, and per-resource request shapes. |
 | [cadenya-cli](skills/cadenya-cli/SKILL.md) | The `cadenya` CLI: login and workspaces, request bodies from flags or YAML, Tool Sets and Agents, streaming objectives, approvals, and CI scripts. |
 | [cadenya-typescript-sdk](skills/cadenya-typescript-sdk/SKILL.md) | The `@cadenya/cadenya` TypeScript SDK: client setup, methods, pagination, errors, objective event streams, and webhook verification. |
+| [cadenya-go-sdk](skills/cadenya-go-sdk/SKILL.md) | The Cadenya Go SDK. |
+| [cadenya-python-sdk](skills/cadenya-python-sdk/SKILL.md) | The Cadenya Python SDK. |
+| [cadenya-ruby-sdk](skills/cadenya-ruby-sdk/SKILL.md) | The Cadenya Ruby SDK. |
+| [cadenya-start-without-account](skills/cadenya-start-without-account/SKILL.md) | Getting a temporary Cadenya workspace with no signup, and claiming it within 24 hours. |
 
 ## MCP Servers
 

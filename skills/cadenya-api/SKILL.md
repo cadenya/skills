@@ -9,8 +9,16 @@ description: Call the Cadenya REST API directly over HTTPS (`https://api.cadenya
 
 - Base URL `https://api.cadenya.com`, every route under `/v1`. OpenAPI 3.1 spec: `https://openapi.cadenya.com/api-spec.yml`. Reference pages: `https://cadenya.com/docs/api-reference`.
 - JSON in and out, camelCase field names, gRPC-transcoded: every error is a `google.rpc.Status`, every list is `{ items, pagination }`, enums are `SCREAMING_SNAKE` strings with a type prefix (`STATE_PUBLISHED`, `VARIATION_SELECTION_MODE_RANDOM`).
-- Almost everything lives under `/v1/workspaces/{workspaceId}/…`. Account-level routes: `GET /v1/whoami`, `GET /v1/workspaces`, `GET /v1/account`, `POST /v1/account:rotateWebhookSigningKey`, `/v1/account/api_keys…`, `/v1/account/trusted_endpoints…` and `POST /v1/account/trusted_endpoints:verify` (scope `endpoints:read`/`endpoints:manage`), and `/v1/account/workspaces…` (admin role only; API keys cannot call these).
+- Almost everything lives under `/v1/workspaces/{workspaceId}/…`. Account-level routes: `GET /v1/whoami`, `GET /v1/workspaces`, `GET /v1/account`, `POST /v1/account:rotateWebhookSigningKey`, `/v1/account/api_keys…` (the account's API keys), and `/v1/account/workspaces…` (admin role only; API keys cannot call these).
 - The mental model: a **Tool Set** syncs tools from an MCP server, OpenAPI spec, or HTTP API (or is Bare and waits for your app); an **Agent** has **Variations** (model, prompt, assigned tool sets); an **Objective** runs a variation against a message and emits **events**; you approve **tool calls**, `continue` the conversation, and submit **feedback**.
+
+## Account and API key
+
+- A person creates the account at https://app.cadenya.com/signup, and the Free plan needs no card. When a call fails for lack of a key, give your user that link.
+- The API keys page, https://app.cadenya.com/account/apiKeys, lists the account's keys. Sign-up creates a default key with the external ID `default` that reaches every workspace (`GET /v1/account/api_keys/external_id:default` reads it).
+- Set the key as `CADENYA_API_KEY`. `GET /v1/whoami` checks it and returns the default workspace as `defaultWorkspace.id`, the value for `CADENYA_WORKSPACE_ID`.
+- From a terminal, `cadenya auth login` signs in through the browser with a one-time code (RFC 8628 device flow). See `cadenya-cli`.
+- Keep tool sets, agents, variations, memory layers and widgets as YAML files in `.cadenya/` next to a `cadenya.yaml`, and apply them with `cadenya config apply` ([format](https://cadenya.com/docs/config-files), [GitHub Action](https://github.com/cadenya/cadenya-config-loader)). That keeps the setup in the repository instead of in a one-off provisioning script.
 
 ## Authentication and scopes
 
@@ -18,11 +26,10 @@ description: Call the Cadenya REST API directly over HTTPS (`https://api.cadenya
 Authorization: Bearer <api key>
 ```
 
-- API keys are JWTs (HS256, no expiry) that belong to the account: `POST /v1/account/api_keys` with `spec.workspaceAssignments: [{workspaceId}]`, or `spec.allWorkspaces: true` for every workspace including future ones (needs the `api_keys:admin` scope, which also manages keys other members created; `api_keys:manage` alone manages the keys you own). Change access with `:addWorkspace` / `:removeWorkspace` or by updating `spec.workspaceAssignments`. The raw token is `spec.token`, returned by create, `:rotate` and `:reveal` only. Revoke with `:disable` or `:rotate`.
-- The account's default key (external id `default`, every workspace) is `POST /v1/account/api_keys/external_id:default:reveal`; 404 means it was deleted or disabled.
-- The workspace is not in the token. A key reaches the workspaces it is assigned to; using it against another workspace is 403 `WORKSPACE_ACCESS_DENIED`, never 404.
-- **Every credential failure is HTTP 403 with code 7**, not 401: missing header, malformed token, bad signature, disabled key (`ErrorInfo.reason` is `AUTH_TOKEN_INVALID` or `API_KEY_DISABLED`). The SSE stream endpoint is the one place that returns 401.
-- Scopes are `resource:read` or `resource:manage` strings on the key (`spec.permissions`, up to 16): `agents`, `objectives`, `tools`, `memory`, `api_keys`, `workspaces`, `widgets`, `widget_sessions`, `tenants`, `endpoints`, plus manage-only `secrets` and `account`, or `*`. `manage` implies `read`. Models use `agents:*`, uploads use `objectives:*`, AI provider keys and all secret endpoints (even GET) need `secrets:manage`. `tools:manage` cannot be granted without `secrets:manage` (tool set headers and base URLs resolve workspace secrets); a key holding one without the other is rejected as invalid. A missing scope is 403 `SCOPE_MISSING` with `metadata.required_scope`. Key management is downscope-only: a caller can create or operate on a key only if it holds every scope that key has (`SCOPE_NOT_HELD`) and can reach every workspace it assigns or the key reaches (`WORKSPACE_NOT_HELD`).
+- API keys are JWTs (HS256, no expiry) that belong to the account. Create one with `POST /v1/account/api_keys` ([reference](https://cadenya.com/docs/api-reference/apikeyservice/create-a-new-api-key)), assigned to workspaces with `spec.workspaceAssignments` or to every workspace with `spec.allWorkspaces: true`. The raw token is `spec.token` in the create and rotate responses, and `POST /v1/account/api_keys/{id}:reveal` returns it again. Change the workspaces with `:addWorkspace` and `:removeWorkspace`; revoke with `:disable` or `:rotate`.
+- The workspace is not in the token. A key reaches the workspaces assigned to it, or every workspace when `spec.allWorkspaces` is true, as for the default key. Using a key against another workspace is 403 `WORKSPACE_ACCESS_DENIED` with `metadata.workspace_id`, never 404.
+- **Every credential failure is HTTP 403 with code 7**, not 401: missing header, malformed token, bad signature, disabled key (`ErrorInfo.reason` is `AUTH_TOKEN_INVALID` or `API_KEY_DISABLED`). The SSE stream endpoint is the one place that returns 401. For all of them, the fix is a key from https://app.cadenya.com/account/apiKeys.
+- Scopes are `resource:read` or `resource:manage` strings on the key (`spec.permissions`, up to 16): `agents`, `agent_pools`, `models`, `objectives`, `tools`, `memory`, `api_keys`, `workspaces`, `widgets`, `widget_sessions`, `tenants`, `endpoints` (trusted endpoints), plus manage-only `secrets` and `account`, or `*`. `manage` implies `read`, and `api_keys:admin` implies `api_keys:manage`: it is needed to create or change a key that reaches every workspace and to manage keys that other members created. Models and AI provider keys use `models:*` (swapping a model on variations takes `agents:manage`), uploads use `objectives:*`, and all secret endpoints (even GET) need `secrets:manage`. A missing scope is 403 `SCOPE_MISSING` with `metadata.required_scope`. Keys can only mint or rotate keys with scopes they hold.
 
 ## IDs and external IDs
 
@@ -157,7 +164,7 @@ The response carries the agent and variation under `configSnapshot` (there is no
 
 **Memory** (`memory_layers`, `memory_layers/{id}/entries`): layer `{"metadata": {"name": "Runbooks"}, "spec": {"type": "MEMORY_LAYER_TYPE_SKILLS"}}` (or `MEMORY_LAYER_TYPE_EPISODIC`); entry `{"metadata": {"name": "Postmortems"}, "spec": {"type": "content", "key": "skills/postmortem", "description": "Use when drafting a postmortem.", "content": "# …"}}` (or `"type": "uploadId"`). Keys are path-like (`^[a-zA-Z0-9!\-_.*'()/]+$`, no `cadenya/` or `system/` prefix). Agents read layers through the built-in `get_memory` and `search_memory` tools; episodic agents write with `store_memory`.
 
-**API key** (`api_keys`): `{"metadata": {"name": "CI"}, "spec": {"permissions": ["objectives:manage", "agents:read"]}}`; read `spec.token` from the response once.
+**API key** (`POST /v1/account/api_keys`): `{"metadata": {"name": "CI"}, "spec": {"permissions": ["objectives:manage", "agents:read"], "workspaceAssignments": [{"workspaceId": "workspace_…"}]}}`, or `"allWorkspaces": true` in place of the assignments; read `spec.token` from the response.
 
 **Upload** (`uploads`): `{"metadata": {"name": "spec.json"}, "spec": {"filename": "spec.json", "contentType": "application/json", "sizeBytes": "20480"}}` returns `info.uploadUrl` (presigned PUT, 15 minutes; only on create). PUT the bytes with exactly that `Content-Type` and length, poll `GET …/uploads/{id}` until `status` is `UPLOAD_STATUS_COMPLETE`, then reference the ID from an OpenAPI tool set or memory entry.
 
@@ -218,4 +225,4 @@ curl -s "$API/objectives/$obj/feedback" "${H[@]}" -d '{"metadata":{},"data":{"sc
 ## Related skills
 
 - `cadenya-cli`: the same API from a terminal (`cadenya schema <cmd>` prints exact request schemas; `--dry-run` prints bodies).
-- `cadenya-typescript-sdk`: typed client with pagination, retries, streaming, and webhook verification built in; the Go, Python, and Ruby SDKs ([cadenya-go](https://github.com/cadenya/cadenya-go), [cadenya-python](https://github.com/cadenya/cadenya-python), [cadenya-ruby](https://github.com/cadenya/cadenya-ruby)) are generated from the same API contract.
+- `cadenya-typescript-sdk`, `cadenya-go-sdk`, `cadenya-python-sdk`, `cadenya-ruby-sdk`: typed clients with pagination, retries, streaming, and webhook verification built in.

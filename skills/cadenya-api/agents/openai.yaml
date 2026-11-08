@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya API Usage"
+  short_description: "Build integrations with the Cadenya API"
+  default_prompt: "Use $cadenya-api to build or troubleshoot a Cadenya API integration."

@@ -18,4 +18,5 @@ Your knowledge of Cadenya's API, CLI, and SDKs may be outdated. **Prefer retriev
 - Use [cadenya](../skills/cadenya/SKILL.md) to choose the right skill and documentation page.
 - Use [cadenya-api](../skills/cadenya-api/SKILL.md) for IDs, field masks, pagination, errors, and request shapes.
 - Use [cadenya-cli](../skills/cadenya-cli/SKILL.md) for `cadenya` commands and scripts.
-- Use [cadenya-typescript-sdk](../skills/cadenya-typescript-sdk/SKILL.md) for code that imports `@cadenya/cadenya`.
+- Use [cadenya-typescript-sdk](../skills/cadenya-typescript-sdk/SKILL.md), [cadenya-go-sdk](../skills/cadenya-go-sdk/SKILL.md), [cadenya-python-sdk](../skills/cadenya-python-sdk/SKILL.md), or [cadenya-ruby-sdk](../skills/cadenya-ruby-sdk/SKILL.md) for code that uses a Cadenya SDK.
+- Use [cadenya-start-without-account](../skills/cadenya-start-without-account/SKILL.md) when the user has no Cadenya credential.

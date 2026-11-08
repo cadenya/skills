@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya TypeScript SDK"
+  short_description: "Use @cadenya/cadenya from TypeScript or JavaScript"
+  default_prompt: "Use $cadenya-typescript-sdk to build or troubleshoot a Cadenya integration with the TypeScript SDK."

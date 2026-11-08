@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya Python SDK"
+  short_description: "Use the cadenya package from Python"
+  default_prompt: "Use $cadenya-python-sdk to build or troubleshoot a Cadenya integration with the Python SDK."

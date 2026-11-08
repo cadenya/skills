@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya CLI Usage"
+  short_description: "Use Cadenya from terminal workflows"
+  default_prompt: "Use $cadenya-cli to complete a Cadenya task from the command line."

@@ -24,6 +24,14 @@ import Cadenya, { APIError, APIConnectionError, Webhooks } from '@cadenya/cadeny
 import type { Agent, ObjectiveEvent, ToolSetCreateParams } from '@cadenya/cadenya';
 ```
 
+## Account and API key
+
+- A person creates the account at https://app.cadenya.com/signup, and the Free plan needs no card. When there is no key yet, give your user that link.
+- The API keys page, https://app.cadenya.com/account/apiKeys, lists the account's keys. Sign-up creates a default key that reaches every workspace. Set the key as `CADENYA_API_KEY`: the SDK reads its options and the environment, never the CLI's stored login.
+- `(await client.profiles.whoami()).defaultWorkspace?.id` is the default workspace ID, the value for `CADENYA_WORKSPACE_ID`, and `cadenya workspaces list` lists the others.
+- From a terminal, `cadenya auth login` signs in through the browser with a one-time code (see `cadenya-cli`).
+- Keep tool sets, agents, variations, memory layers and widgets as YAML files in `.cadenya/` next to a `cadenya.yaml`, and apply them with `cadenya config apply` ([format](https://cadenya.com/docs/config-files), [GitHub Action](https://github.com/cadenya/cadenya-config-loader)). That keeps the setup in the repository instead of in a one-off provisioning script.
+
 ## Client
 
 ```ts
@@ -63,7 +71,7 @@ client.objectives.approveToolCall(objectiveId, toolCallId, params?, options?)
 | `profiles` | `whoami` |
 | `workspaces` | `list` |
 | `workspaceAdmin` | `listAccount`, `create`, `retrieve`, `update`, `archive`, `listMembers`, `addMember`, `removeMember`, `listProfiles` |
-| `apiKeys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `addWorkspace`, `removeWorkspace` (account-level; `reveal("external_id:default")` is the default key) |
+| `apiKeys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `addWorkspace`, `removeWorkspace` (account keys) |
 | `aiProviderKeys`, `models` | CRUD; `models.enable`, `models.disable`, `models.swapOnVariations` |
 | `toolSets` | `list`, `create`, `retrieve`, `update`, `delete`, `archive`, `unarchive`, `listEvents`, `listUsage`, `retrieveOpenApiSpec` |
 | `toolSets.tools` | `list`, `create`, `retrieve`, `update`, `delete`, `omit`, `restore` |
