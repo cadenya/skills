@@ -77,7 +77,7 @@ Body fields are keyword arguments (`metadata:`, `spec:`, `default_variation:`, `
 - **Write snake_case keys.** The gem maps known keys to wire names (`system_prompt_template` → `systemPromptTemplate`). camelCase keys pass through too, but giving both spellings of one field raises. Free-form fields (`system_prompt_data`, `headers`, `labels`, `parameters`, `output_definition`) are sent exactly as you wrote them.
 - A union carries a `type` tag that names the populated key: `{ type: "mcp", mcp: {...} }`, `{ type: "toolSetId", tool_set_id: "..." }`. Tag values stay camelCase.
 - Read-only keys on request types are dropped silently, so you can edit a fetched object's `to_h` and send it back. `nil` keyword arguments are omitted; a `nil` inside a hash is sent as JSON `null`.
-- Secrets interpolate only as `{{ secrets.NAME }}`. The server rejects `${NAME}` with `legacy dollar references are not supported`, even though some API doc comments still show it.
+- Secrets interpolate only as `{{ secrets.NAME }}`. The server rejects `${NAME}` with `legacy dollar references are not supported`, even where an API doc comment shows it.
 
 ```ruby
 # Tool Set. MCP_TOKEN can be a workspace secret or come in spec.secrets in this same call.
@@ -92,6 +92,9 @@ tool_set = client.tool_sets.create(
     secrets: [{ name: "MCP_TOKEN", value: ENV.fetch("MCP_TOKEN") }]
   }
 )
+
+# Model: pick one the workspace has enabled; never hardcode a model slug.
+model = client.models.list(state: "STATE_ENABLED", limit: 1).items.first or raise "no enabled model"
 
 # Agent plus its default variation in one call. variation_selection_mode defaults to WEIGHTED.
 agent = client.agents.create(
@@ -108,11 +111,12 @@ agent = client.agents.create(
 )
 
 # Tools attach to variations, not Agents. add_assignment and remove_assignment take the union as body:.
+variation_id = client.agents.variations.list(agent.metadata.id, limit: 1).items.first.metadata.id   # create returns the Agent only
 client.agents.variations.add_assignment(agent.metadata.id, variation_id,
                                         body: { type: "toolSetId", tool_set_id: tool_set.metadata.id })
 ```
 
-Pick the model with `model = client.models.list(state: "STATE_ENABLED", query: "claude").items.first`; `query:` matches part of the name, while `prefix:` matches only the start of the name, external ID or ID. Never hardcode a model slug. A literal `model_id` takes the form `<provider-key-external-id>.<model-external-id>`.
+To narrow the model list, `query:` matches part of the name, while `prefix:` matches only the start of the name, external ID or ID. A literal `model_id` takes the form `<provider-key-external-id>.<model-external-id>`.
 
 Other adapters: `{ type: "openapi", openapi: { type: "url", url: ... } }` (or `{ type: "uploadId", upload_id: ... }`), `{ type: "http", http: { base_url: ... } }`, `{ type: "bare", bare: {} }`. The Tool Set create loads an MCP or OpenAPI source live and fails if the source is unreachable or lists no tools. When a header names a secret that does not exist yet, the create skips that check, and the mistake surfaces later at sync.
 
@@ -163,7 +167,7 @@ Retries default to 0 and apply only to GET, HEAD, PUT and DELETE, on 408, 409, 4
 
 Default to `create_and_stream`: it creates the objective and streams it in one request, and the server ends the stream once the objective is `OBJECTIVE_STATE_WAITING` (the turn is over) or terminal. It takes the same arguments as `create` plus `include_deltas:`, and `metadata: { external_id: }` is required: it is the idempotency key that makes a reconnect attach to the same objective. The first item has `type` `"objective"` (`item.objective`); every later item has `type` `"event"` (`item.event`).
 
-The end-of-turn signal is a `stateChanged` event whose `to_state` is `OBJECTIVE_STATE_WAITING`. `OBJECTIVE_STATE_FINALIZED`, `_FAILED`, `_CANCELLED` and `_TIMED_OUT` are terminal. Tool approvals happen mid-turn, while the objective is still running.
+The end-of-turn signal is a `stateChanged` event whose `to_state` is `OBJECTIVE_STATE_WAITING`. `OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED` and `OBJECTIVE_STATE_TIMED_OUT` are terminal. `OBJECTIVE_STATE_INTERRUPTING` is not settled. Tool approvals happen mid-turn, while the objective is still running.
 
 ```ruby
 SETTLED = %w[OBJECTIVE_STATE_WAITING OBJECTIVE_STATE_FINALIZED OBJECTIVE_STATE_FAILED
@@ -174,7 +178,11 @@ handle = lambda do |event|   # true once the objective is waiting or terminal
   data = event.data          # payload sits under the snake_case form of data.type
   case data.type
   when "toolApprovalRequested"
-    client.objectives.approve_tool_call(objective_id, data.tool_approval_requested.tool_call_id)
+    begin
+      client.objectives.approve_tool_call(objective_id, data.tool_approval_requested.tool_call_id)
+    rescue Cadenya::APIError => e
+      raise unless e.code == 9   # already approved or denied: a replayed request
+    end
   when "assistantMessage"
     puts data.assistant_message.content if data.assistant_message.content
   when "finalized"
@@ -187,6 +195,15 @@ end
 
 # Attach with stream_events until settled; returns the cursor for the next turn.
 follow = lambda do |cursor|
+  if cursor.nil?   # no checkpoint: a live-only stream never shows a settled objective or a pending approval
+    settled = false
+    client.objectives.list_events(objective_id, sort_order: "asc").each do |event|
+      done = handle.(event)
+      settled = done if event.data.type == "stateChanged"   # the latest state change decides
+      cursor = event.metadata.id
+    end
+    return cursor if settled
+  end
   loop do
     stream = client.objectives.stream_events(objective_id, last_event_id: cursor)
     settled = false
@@ -204,18 +221,17 @@ stream = client.objectives.create_and_stream(
 )
 settled = false
 stream.each do |item|
-  if item.type == "objective" then objective_id = item.objective.metadata.id
+  if item.type == "objective"   # re-sent after a reconnect; its state shows a run that had already settled
+    objective_id = item.objective.metadata.id
+    settled = SETTLED.include?(item.objective.state)
   elsif handle.(item.event) then settled = true
   end
 end
 cursor = stream.last_event_id
-unless settled
-  if cursor.nil?   # external_id attached to an objective started earlier: no history was replayed
-    cursor = client.objectives.list_events(objective_id, sort_order: "desc", limit: 1).items.first&.metadata&.id
-    settled = SETTLED.include?(client.objectives.retrieve(objective_id).state)   # already settled: following would wait forever
-  end
-  cursor = follow.(cursor) unless settled   # otherwise the connection was cut: replay from the cursor
+if settled && cursor.nil?   # external_id reused from a settled run: checkpoint at its newest event
+  cursor = client.objectives.list_events(objective_id, sort_order: "desc", limit: 1).items.first&.metadata&.id
 end
+cursor = follow.(cursor) unless settled   # cut before it settled, or attached to a run still working
 
 client.objectives.continue(objective_id, message: "Which one is most urgent?")
 cursor = follow.(cursor)                  # the next turn
@@ -224,7 +240,7 @@ cursor = follow.(cursor)                  # the next turn
 Rules for `stream_events`, the attach-only stream:
 
 - It never ends on its own. Call `stream.close` once `handle` returns true; `each` then returns cleanly.
-- Without `last_event_id:` it delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live. To attach to an objective you did not start, replay `list_events(objective_id, sort_order: "asc")` through `handle`, then check `retrieve(objective_id).state`: a settled objective sends no further `stateChanged`, so stream from the last item's `metadata.id` only while it is still working.
+- Without `last_event_id:` it delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live. With no cursor, `follow` replays `list_events(objective_id, sort_order: "asc")` through `handle` first and streams only if the latest `stateChanged` has not settled. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - Resume only from `stream.last_event_id`, never from `event.metadata.id` of a streamed event. Heartbeats (`hb_…`) and deltas (`dlt_…`, with `include_deltas: true`) carry IDs the server rejects as a cursor (400 `Last-Event-ID must be a persisted objevt_ event ID`); only `objevt_…` IDs advance `stream.last_event_id`.
 
 Both streams:
@@ -261,7 +277,7 @@ The gem has no logger. Pass `connection:` with Faraday's logger middleware (plus
 3. Create the Tool Set, then check `client.tool_sets.tools.list(tool_set.metadata.id)`. The first sync runs after the create returns, so poll briefly before treating an empty list as a failure.
 4. Create the Agent with `default_variation:`. `agents.create` returns no variation ID, so get it from `client.agents.variations.list(agent.metadata.id, limit: 1).items.first`.
 5. `add_assignment` the Tool Set to that variation.
-6. `client.agents.publish(agent.metadata.id)`. An objective on a `STATE_DRAFT` Agent fails with 400 `validation failed`, field `agent_id`: `agent must be published to create an objective`.
+6. `client.agents.publish(agent.metadata.id)`. An objective on a `STATE_DRAFT` Agent fails with 400 `validation failed`, field `agent_id`: `agent must be published to create an objective` (`create_and_stream` reports only `validation failed`, since stream errors carry no details).
 7. Run `create_and_stream` with an `external_id`, handle approvals, and stop on the settled `stateChanged`.
 8. Optionally record feedback: `client.objectives.create_feedback(objective_id, metadata: {}, data: { score: 1.0, comment: "Accurate summary" })`.
 
@@ -271,9 +287,9 @@ The gem has no logger. Pass `connection:` with Faraday's logger middleware (plus
 | --- | --- | --- |
 | `ArgumentError: missing workspaceId: pass it, set it on the client, or set CADENYA_WORKSPACE_ID` | no client default and no `workspace_id:` | set one of those |
 | 400 field `spec.model_config.model_id` | wrong `model_id` form, disabled model, or no workspace default | a `model_…` ID from `models.list` |
-| 429 `the account has reached its plan's limit of N for agent_variations` | the plan caps non-archived variations across the whole account; `default_variation` counts | archive unused variations, or update an existing one |
+| 429 `the account has reached its plan's limit of N for agent_variations` (`ENTITLEMENT_LIMIT_REACHED`) | the plan caps variations of non-archived Agents across the whole account; `default_variation` counts | delete unused variations, archive an unused Agent, or upgrade the plan (an unclaimed temporary account gets `REQUIRES_CLAIM` instead) |
 | 400 `metadata.externalId is required …` from `create_and_stream` | no `metadata: { external_id: }` | add a stable external ID |
-| `stream_events` yields nothing and never returns for a finished objective | a settled objective sends no new events | check `retrieve(id).state`; read a settled objective with `list_events(sort_order: "asc")` instead of streaming |
+| `stream_events` yields nothing and never returns for a finished objective | no `last_event_id:`, and a settled objective sends no new events | replay with `list_events(sort_order: "asc")` and stream only if it has not settled, as `follow` does |
 | `stream_events` `each` never returns | that stream never closes | `stream.close` on the settled `stateChanged` |
 | `ArgumentError: streaming with a caller-supplied connection: requires an explicit stream_transport:` | custom `connection:` without a stream transport | pass `stream_transport:`, or drop `connection:` |
 | `ArgumentError: unknown request_options key(s): …` | typo in `request_options:` | only `headers`, `timeout`, `max_retries`, `reconnect` |

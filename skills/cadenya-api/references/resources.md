@@ -92,7 +92,7 @@ Bare tools use `"config": {"type": "bare", "bare": {"alwaysSetResult": "Chart re
 - Templates are Liquid; `{% %}` tags are allowed in prompts (not in headers). `spec.systemPromptDataSchema` (JSON Schema) validates `systemPromptData` and doubles as the tool schema when the Agent is a sub-agent. `spec.outputDefinition` (JSON Schema) makes objectives finalize with structured `output`.
 - `spec.variationSelectionMode` is optional; unset means `VARIATION_SELECTION_MODE_WEIGHTED` (Thompson sampling on feedback).
 - Agents start `STATE_DRAFT`. `:publish` needs at least one variation, and **objectives require `STATE_PUBLISHED`**. `:unarchive` returns the Agent to draft.
-- Variations count toward an account-wide plan cap on non-archived variations, and `defaultVariation` counts too. Over the cap the create is 429 `the account has reached its plan's limit of N for agent_variations` with `ErrorInfo.reason` `ENTITLEMENT_LIMIT_REACHED`.
+- Variations count toward an account-wide plan cap on the variations of non-archived Agents, and `defaultVariation` counts too. Over the cap the create is 429 `the account has reached its plan's limit of N for agent_variations` with `ErrorInfo.reason` `ENTITLEMENT_LIMIT_REACHED` (an unclaimed temporary account gets `REQUIRES_CLAIM` instead). Delete unused variations, archive an unused Agent, or upgrade the plan.
 - Variations live at `agents/{agentId}/variations`. The Agent response does not include the variation; list it to verify.
 
 ## Assignments

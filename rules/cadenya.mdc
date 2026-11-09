@@ -16,6 +16,7 @@ Your knowledge of Cadenya's API, CLI, and SDKs may be out of date. **Prefer retr
 - **Stream new objectives with create-and-stream** (`POST /v1/workspaces/{workspace_id}/objectives:stream`). It needs `metadata.externalId` as its idempotency key, and the server ends the stream once the objective reaches `OBJECTIVE_STATE_WAITING` or a terminal state.
 - **Close `events:stream` yourself.** Attaching to an existing objective with `GET …/objectives/{objective_id}/events:stream` never ends on its own. Stop on a `stateChanged` event whose `toState` is `OBJECTIVE_STATE_WAITING`, `OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED`, or `OBJECTIVE_STATE_TIMED_OUT`.
 - **Resume only from a persisted `objevt_` event ID** (the SDK's tracked last event ID). Heartbeat and delta events carry no resumable ID, and the server rejects them as `Last-Event-ID`.
+- **With no checkpoint, replay the events list first** (`GET …/events?sortOrder=asc`). An attach without `Last-Event-ID` sends only new events, so it never shows an objective that has already settled or an approval that is already pending, and waits forever. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 
 ## Cadenya skills
 

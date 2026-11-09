@@ -191,6 +191,15 @@ def handle(objective_id: str, event) -> bool:
 
 def follow(objective_id: str, last_event_id) -> str:
     """Attach with stream_events until the objective settles; return the resume checkpoint."""
+    if last_event_id is None:                        # no checkpoint: a live-only stream never shows a settled
+        settled = False                              # objective or an approval already requested, so replay first
+        for event in client.objectives.list_events(objective_id, sort_order="asc"):
+            done = handle(objective_id, event)
+            if event.data.type == "stateChanged":
+                settled = done                       # the latest state change decides
+            last_event_id = event.metadata.id
+        if settled:
+            return last_event_id
     while True:
         with client.objectives.stream_events(objective_id, last_event_id=last_event_id) as stream:
             for event in stream:
@@ -214,7 +223,7 @@ with client.objectives.create_and_stream(
     last_event_id = stream.last_event_id
 if settled and last_event_id is None:                # attached to a settled run: checkpoint at its newest event
     last_event_id = client.objectives.list_events(objective_id, sort_order="desc", limit=1).items[0].metadata.id
-if not settled:                                      # connection cut before the objective settled
+if not settled:                                      # cut before it settled, or attached to a run still working
     last_event_id = follow(objective_id, last_event_id)
 
 client.objectives.continue_(objective_id, message="Which one is most urgent?")
@@ -223,7 +232,7 @@ last_event_id = follow(objective_id, last_event_id)  # next turn, replayed from 
 
 Rules the code above depends on:
 
-- `stream_events` attaches to an existing objective and **never closes on its own**; stop on the settled `stateChanged`. Without `last_event_id` it delivers only events created after the connection opens; with it, the server replays everything after that ID, then goes live. To attach from scratch, page `list_events(objective_id, sort_order="asc")` and pass the last event's ID.
+- `stream_events` attaches to an existing objective and **never closes on its own**; stop on the settled `stateChanged`. Without `last_event_id` it delivers only events created after the connection opens; with it, the server replays everything after that ID, then goes live. With no checkpoint, `follow` replays `list_events(objective_id, sort_order="asc")` first and streams only if the latest `stateChanged` has not settled. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - Resume only from `stream.last_event_id`, never from `event.metadata.id`. Live-only `heartbeat` events (and deltas, with `include_deltas=True`) carry `hb_`/`dlt_` IDs, and resuming from one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.last_event_id` starts at the ID you passed and advances only on persisted events.
 - Mid-stream transport drops reconnect from `stream.last_event_id` (5 attempts per outage). `RequestOptions(reconnect=False)` surfaces them as `APIConnectionError` so you can resume yourself. Connections are cut after about 10 minutes. A cut that reaches the client as a clean end of stream stops the `for` loop with no reconnect, which is why `follow` reopens.
 - A stream is single-use (`stream already consumed`); open a new one with `last_event_id=stream.last_event_id`.
@@ -253,11 +262,11 @@ No built-in logger: `logging.getLogger("httpx").setLevel(logging.DEBUG)`, or pas
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `ValueError: missing workspaceId: pass it, set it on the client, or set CADENYA_WORKSPACE_ID` | no workspace anywhere | set one of those three |
-| 400 `validation failed`, field `agent_id`: `agent must be published to create an objective` | Agent is `STATE_DRAFT` | `client.agents.publish(id)` |
+| 400 `validation failed`, field `agent_id`: `agent must be published to create an objective` (from `create_and_stream`: `validation failed` alone, since stream errors carry no details) | Agent is `STATE_DRAFT` | `client.agents.publish(id)` |
 | 400 `validation failed` on `spec.model_config.model_id` | wrong or disabled model | `metadata.id` from `models.list(state="STATE_ENABLED")` |
 | 400 `metadata.externalId is required: …` | `create_and_stream` without `metadata.external_id` | pass `metadata={"external_id": ...}` |
 | 409 `resource with the same identifier already exists` | `create` with an external ID already in use | retrieve `external_id:<id>`, or use a new one |
-| 429 `the account has reached its plan's limit of N for agent_variations` | account-wide cap on non-archived variations (`ENTITLEMENT_LIMIT_REACHED`; the default variation counts) | delete unused variations, or upgrade the plan (an unclaimed temporary account gets `REQUIRES_CLAIM` instead) |
+| 429 `the account has reached its plan's limit of N for agent_variations` | account-wide cap on the variations of non-archived Agents (`ENTITLEMENT_LIMIT_REACHED`; the default variation counts) | delete unused variations, archive an unused Agent, or upgrade the plan (an unclaimed temporary account gets `REQUIRES_CLAIM` instead) |
 | `stream_events` loop never ends | that stream stays open | return on the settled `stateChanged` |
 | `stream_events` yields nothing for a finished objective | no `last_event_id` | replay with `list_events(sort_order="asc")`, then stream from the last ID |
 | `stream already consumed` | iterated a stream twice | new stream with `last_event_id=stream.last_event_id` |

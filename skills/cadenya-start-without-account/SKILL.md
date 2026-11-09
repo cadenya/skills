@@ -11,12 +11,12 @@ A user without a Cadenya account can still have you build with Cadenya. One comm
 
 What the user needs to know:
 
-- **24 hours.** A workspace nobody claims is permanently deleted 24 hours after it was created, with its agents, tool sets, objectives and secrets. It can't be recovered.
+- **24 hours.** A workspace nobody claims is permanently deleted 24 hours after it was created, with its Agents, Tool Sets, objectives and secrets. It can't be recovered.
 - **Only a demo model until claimed.** A temporary workspace has no Cadenya-provided model and no model credit. A free demo model shows the agent loop with scripted output. For real model output before claiming, the user adds their own provider key. Claiming adds Cadenya's promotional model credit (the create output's `nextStep` states the amount).
 - **The claim URL is a secret.** Whoever opens it and signs in becomes the owner of the workspace.
 - **Claiming needs a person without a Cadenya account.** Someone who already has one gets refused, and should use their own account instead.
 
-For everything after setup (tool sets, agents, objectives, config files), use the `cadenya-cli` skill.
+For everything after setup (Tool Sets, Agents, objectives, config files), use the `cadenya-cli` skill.
 
 ## Decide whether to use this at all
 
@@ -70,21 +70,21 @@ First, decide where your reply goes. If anyone besides the user can read it (a P
 
 ## What works before the claim
 
-You can create tool sets, agents and variations, publish agents and run objectives. Some things wait for the claim, and small caps apply to the rest.
+You can create Tool Sets, Agents and variations, publish Agents and run objectives. Some things wait for the claim, and small caps apply to the rest.
 
-- **Tool set hosts.** Tool sets only reach hosts on the account's trusted endpoints, and `cadenya trusted-endpoints create` fails before the claim. Before the claim, tool sets can call Cadenya-hosted endpoints such as the Faker MCP server at `https://free.cadenya.com/faker-mcp`, and Bare tool sets (`--adapter bare`) work because your application supplies each result. An HTTP, OpenAPI or MCP tool set pointed at any other host is refused when you create it (a `validation failed` field violation on `spec.mcp.url`, `spec.openapi.url`, `spec.openapi.baseUrl` or `spec.http.baseUrl`: `… is not a trusted endpoint`), or at sync and call time when the host comes from a reference, until the user claims and trusts the host.
+- **Tool Set hosts.** Tool Sets only reach hosts on the account's trusted endpoints, and `cadenya trusted-endpoints create` fails before the claim. Before the claim, Tool Sets can call Cadenya-hosted endpoints such as the Faker MCP server at `https://free.cadenya.com/faker-mcp`, and Bare Tool Sets (`--adapter bare`) work because your application supplies each result. An HTTP, OpenAPI or MCP Tool Set pointed at any other host is refused when you create it (a `validation failed` field violation on `spec.mcp.url`, `spec.openapi.url`, `spec.openapi.baseUrl` or `spec.http.baseUrl`: `… is not a trusted endpoint`), or at sync and call time when the host comes from a reference, until the user claims and trusts the host.
 - **Needs a claim:** Widgets, widget sessions, tenants, memory layers, agent pools, trusted endpoints, API keys, and workspace administration (members, more workspaces). The temporary key has no scope for these, so they fail with HTTP 403 `SCOPE_MISSING` (`caller does not hold the "…" scope required by this endpoint`). Treat that like `REQUIRES_CLAIM`, and leave Widgets and memory layers out of `.cadenya/` config files until the claim, or `cadenya config apply` fails.
-- **Capped:** agents, variations, tool sets, provider keys, objectives, uploads and loops per month. Going past a cap returns `REQUIRES_CLAIM`, with `limit` and `usage` in the error metadata.
+- **Capped:** Agents, variations, Tool Sets, provider keys, objectives, uploads and loops per month. Going past a cap returns `REQUIRES_CLAIM`, with `limit` and `usage` in the error metadata.
 
 ## Running objectives before the claim
 
 Before you run an objective, ask the user which option they want:
 
-1. **Use the demo model.** It's the default model in a temporary workspace and costs nothing. It doesn't reason. When the variation has a read-only tool assigned (a GET operation, a read-only MCP tool, or a Bare tool, with no approval required), it calls one with made-up arguments, then returns a templated summary of the result. With no such tool, it returns a scripted reply and calls nothing. To show the full loop (tool call, events, completion), assign a read-only tool set first, for example an MCP tool set on the Faker MCP server (`--mcp-url https://free.cadenya.com/faker-mcp`). Tell the user so, and don't present its output as a real model's. Because it's the workspace default, leave the model out of `agents create` and variations to use it. To name it explicitly, run `cadenya models list --display json` and pass the `Demo` model's `metadata.id`, or its reference key `<provider-key external ID>.<model external ID>` (normally `demo.demo`), as `--default-variation-model-id`.
+1. **Use the demo model.** It's the default model in a temporary workspace and costs nothing. It doesn't reason. When the variation has a read-only tool assigned (a GET operation, a read-only MCP tool, or a Bare tool, with no approval required), it calls one with made-up arguments, then returns a templated summary of the result. With no such tool, it returns a scripted reply and calls nothing. To show the full loop (tool call, events, completion), assign a read-only Tool Set first, for example an MCP Tool Set on the Faker MCP server (`--mcp-url https://free.cadenya.com/faker-mcp`). Tell the user so, and don't present its output as a real model's. Because it's the workspace default, leave the model out of `agents create` and variations to use it. To name it explicitly, run `cadenya models list --display json` and pass the `Demo` model's `metadata.id`, or its reference key `<provider-key external ID>.<model external ID>` (normally `demo.demo`), as `--default-variation-model-id`.
 2. **Use their own provider key now.** Ask the user to put the key in an environment variable themselves; never ask them to paste it into the chat. Build the command with `cadenya schema ai-provider-keys create`, and pass the key on stdin so it stays off the command line, for example `printf '%s' "$ANTHROPIC_API_KEY" | cadenya ai-provider-keys create --name "Anthropic" --external-id anthropic --provider anthropic --api-key -`. Then `cadenya models list` shows the new models.
 3. **Claim first.** After the claim, the workspace gets Cadenya's promotional model credit (amount in `nextStep`) and objectives run with no key of their own.
 
-Whichever model you use, publish the agent (`cadenya agents publish <agent>`) before you create an objective. The `cadenya-cli` skill covers building and running.
+Whichever model you use, publish the Agent (`cadenya agents publish <agent>`) before you create an objective. The `cadenya-cli` skill covers building and running.
 
 ## Checking the claim
 

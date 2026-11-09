@@ -202,13 +202,13 @@ cadenya agents retrieve support-triager --display json | jq -r .state
 
 ## Run an objective
 
-Default to `objectives create-and-stream`. It creates the objective and streams its events on one connection, so no event is missed, and **the stream ends on its own** once the objective reaches `OBJECTIVE_STATE_WAITING` (the turn is over) or a terminal state. `--external-id` is required and is the idempotency key: rerunning with the same external ID attaches to the existing objective instead of creating another, and `--last-event-id` then resumes after that event. An attach without `--last-event-id` sends only new events, so approve anything already pending (`list-tool-calls --status TOOL_CALL_STATUS_WAITING_FOR_APPROVAL`) or the stream waits on it.
+Default to `objectives create-and-stream`. It creates the objective and streams its events on one connection, so no event is missed, and **the stream ends on its own** once the objective reaches `OBJECTIVE_STATE_WAITING` (the turn is over) or a terminal state. `--external-id` is required and is the idempotency key: rerunning with the same external ID attaches to the existing objective instead of creating another, and `--last-event-id` then resumes after that event. An attach without `--last-event-id` sends only new events, so a rerun first checkpoints at the newest event and approves anything already pending, as `turn` below does; otherwise the stream waits on that approval.
 
 - Each stdout line is NDJSON. The first is `{"type":"objective","objective":{…}}`; every later line is `{"type":"event","event":{…}}`.
 - The end-of-turn signal is a `stateChanged` event with `toState: OBJECTIVE_STATE_WAITING`. Terminal states are `OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED`, and `OBJECTIVE_STATE_TIMED_OUT`.
 - Only durable `objevt_…` IDs are resume cursors. Heartbeats (`hb_…`) and `--include-deltas` fragments (`dlt_…`) are not; resuming from one fails with `Last-Event-ID must be a persisted objevt_ event ID`.
 - Connections are cut after about 10 minutes. The CLI reconnects by itself from the last event ID it saw (up to 5 attempts). If the command still exits before the turn ends, rerun it with `--last-event-id` set to the last `objevt_` ID.
-- `continue` needs `OBJECTIVE_STATE_WAITING` unless you pass `--enqueue`. `cancel` and `interrupt` are asynchronous: `interrupt` stops foreground work and leaves the objective WAITING (PENDING when `--enqueue` messages are queued), and `cancel` ends it.
+- `continue` needs `OBJECTIVE_STATE_WAITING` unless you pass `--enqueue`. `cancel` and `interrupt` are asynchronous: `interrupt` stops foreground work and leaves the objective `OBJECTIVE_STATE_WAITING` (`OBJECTIVE_STATE_PENDING` when `--enqueue` messages are queued), and `cancel` ends it (the server ignores `cancel --reason`).
 
 ```sh
 #!/usr/bin/env bash
@@ -217,20 +217,31 @@ export CADENYA_WORKSPACE_ID=development
 ext="ticket-4821"   # stable per unit of work: a rerun attaches instead of duplicating
 obj="" last="" state="" opened=""
 
+approve() {   # fails with code 9 when a replayed request was already handled
+  cadenya objectives approve-tool-call "$1" "$2" </dev/null >/dev/null || true
+}
+
 # Stream one turn: create (or rejoin) the objective and read until the stream ends.
 turn() {
   state=""
+  if [ -z "$last" ] && cadenya objectives retrieve "$ext" >/dev/null 2>&1; then
+    # A rerun with no checkpoint would get only new events: checkpoint at the newest event, then approve what is already waiting.
+    last=$(cadenya objectives list-events "$ext" --sort-order desc --limit 1 --display json | jq -r '.items[0].metadata.id // empty')
+    for tc in $(cadenya objectives list-tool-calls "$ext" --status TOOL_CALL_STATUS_WAITING_FOR_APPROVAL --display json | jq -r '.items[].metadata.id'); do
+      approve "$ext" "$tc"
+    done
+  fi
   for _ in 1 2 3 4 5; do
     opened=""
     while IFS= read -r line; do
-      if [ "$(jq -r .type <<<"$line")" = objective ]; then   # current state too: an attach to a settled objective sends no events
+      if [ "$(jq -r .type <<<"$line")" = objective ]; then   # carries the state: an attach to a settled objective sends no events
         opened=1 obj=$(jq -r .objective.metadata.id <<<"$line") state=$(jq -r .objective.state <<<"$line"); continue
       fi
       ev=$(jq -c .event <<<"$line")
       id=$(jq -r .metadata.id <<<"$ev"); [[ $id == objevt_* ]] && last=$id
       case "$(jq -r .data.type <<<"$ev")" in
         toolApprovalRequested)   # or: deny-tool-call "$obj" <tool-call-id> --memo "Use the read-only lookup instead."
-          cadenya objectives approve-tool-call "$obj" "$(jq -r .data.toolApprovalRequested.toolCallId <<<"$ev")" </dev/null >/dev/null ;;
+          approve "$obj" "$(jq -r .data.toolApprovalRequested.toolCallId <<<"$ev")" ;;
         assistantMessage) jq -r '.data.assistantMessage.content // empty' <<<"$ev" ;;
         stateChanged) state=$(jq -r .data.stateChanged.toState <<<"$ev") ;;
       esac
@@ -250,7 +261,7 @@ cadenya objectives continue "$obj" --message "Which one is most urgent?" >/dev/n
 turn   # same external ID plus --last-event-id: streams the next turn and ends at the next WAITING
 ```
 
-To follow an objective created elsewhere, use `objectives stream-events <objective-id> --last-event-id <objevt_…>`. Unlike create-and-stream, **`stream-events` never closes on its own**: stop reading at the end-of-turn signal and kill the process (it exits 130). Without `--last-event-id` it sends only events that arrive after you connect. `objectives create` (no stream) returns at once with `state: OBJECTIVE_STATE_PENDING`.
+To follow an objective created elsewhere, use `objectives stream-events <objective-id> --last-event-id <objevt_…>`. Unlike create-and-stream, **`stream-events` never closes on its own**: stop reading at the end-of-turn signal and kill the process (it exits 130). Without `--last-event-id` it sends only events that arrive after you connect, so with no checkpoint read `list-events "$obj" --sort-order asc --display json` first: approve anything waiting, and if the latest `stateChanged` is to `OBJECTIVE_STATE_WAITING` or a terminal state, don't stream at all (nothing more arrives). Otherwise stream from the last listed `objevt_` ID. `objectives create` (no stream) returns at once with `state: OBJECTIVE_STATE_PENDING`.
 
 Related reads: `objectives list-events "$obj" --sort-order asc --display json` (history), `objectives list-tool-calls "$obj" --status TOOL_CALL_STATUS_WAITING_FOR_APPROVAL`, `objectives retrieve "$obj" --display json | jq .output` (structured output after `OBJECTIVE_STATE_FINALIZED`), `objectives retrieve-diagnostics`, `objectives list-context-windows`.
 

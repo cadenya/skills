@@ -1,6 +1,6 @@
 ---
 name: cadenya-widgets
-description: Embeds a Cadenya Agent as a chat in a web app with Widgets. Covers creating the Widget server-side, minting Widget Sessions with `@cadenya/cadenya`, handing the browser only its short-lived credentials, rendering with the React UI kit `@cadenya/widgets-ui-react`, tenant and subject isolation, revocation and tenant erasure, origin allowlists and CSP, and widget errors such as `origin not allowed`, `unknown widget`, `TOKEN_EXPIRED` and `Session cannot create or continue conversations`. Use when a task mentions Cadenya Widgets, `widgetSessions.create`, `CadenyaWidgetProvider`, `ConversationsPanel`, `*.widgets.cadenya.com`, or putting an Agent in front of end users in a browser. Do not use for server-to-server objectives, tool sets or agents with no browser surface; use cadenya-api or an SDK skill such as cadenya-typescript-sdk.
+description: Embeds a Cadenya Agent as a chat in a web app with Widgets. Covers creating the Widget server-side, minting Widget Sessions with `@cadenya/cadenya`, handing the browser only its short-lived credentials, rendering with the React UI kit `@cadenya/widgets-ui-react`, tenant and subject isolation, revocation and tenant erasure, origin allowlists and CSP, and widget errors such as `origin not allowed`, `unknown widget`, `TOKEN_EXPIRED` and `Session cannot create or continue conversations`. Use when a task mentions Cadenya Widgets, `widgetSessions.create`, `CadenyaWidgetProvider`, `ConversationsPanel`, `*.widgets.cadenya.com`, or putting an Agent in front of end users in a browser. Do not use for server-to-server objectives, Tool Sets or Agents with no browser surface; use cadenya-api or an SDK skill such as cadenya-typescript-sdk.
 ---
 
 # Cadenya Widgets
@@ -89,7 +89,7 @@ export async function POST() {
 }
 ```
 
-`credentials` is the current envelope. The older `spec.token`, `spec.tokenExpiresAt` and `info.host` fields hold the same values on create. Reads and lists never return a token.
+Read `credentials`. The `spec.token`, `spec.tokenExpiresAt` and `info.host` fields hold the same values on create. Reads and lists never return a token.
 
 ## 3. Render with the React UI kit
 

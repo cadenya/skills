@@ -97,7 +97,7 @@ const toolSet = await client.toolSets.create({
   },
 });
 
-// Narrow with { query: 'haiku' } (name contains) or { prefix } (start of name, external ID or ID).
+// Narrow with { query } (name contains) or { prefix } (start of name, external ID or ID).
 const model = (await client.models.list({ state: 'STATE_ENABLED', limit: 1 })).items[0];
 if (!model) throw new Error('no enabled model in this workspace');
 
@@ -127,7 +127,7 @@ Start and watch an objective with `createAndStream`:
 
 - It needs `metadata.externalId`, the idempotency key. A repeat of the request, including the SDK's automatic reconnect, attaches to the existing objective instead of starting another.
 - The first frame is `{ type: 'objective', objective }`, and every later frame is `{ type: 'event', event }`.
-- The stream ends by itself once the objective is `OBJECTIVE_STATE_WAITING` (the turn is over) or terminal (`FINALIZED`, `FAILED`, `CANCELLED`, `TIMED_OUT`).
+- The stream ends by itself once the objective is `OBJECTIVE_STATE_WAITING` (the turn is over) or terminal (`OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED`, `OBJECTIVE_STATE_TIMED_OUT`).
 
 ```ts
 import { APIError, type ObjectiveEvent } from '@cadenya/cadenya';
@@ -168,13 +168,27 @@ for await (const frame of stream) {
   if (frame.type === 'objective') {
     objectiveId = frame.objective.metadata.id;
     settled = SETTLED.has(frame.objective.state); // a repeat that attaches to a settled objective gets no events
-  } else settled = await handle(objectiveId, frame.event);
+  } else if (await handle(objectiveId, frame.event)) settled = true;
 }
 let lastEventId = stream.lastEventId; // checkpoint for the next turn
-if (!settled) await watch(); // the connection was cut before the turn ended
+if (settled && !lastEventId) {
+  // externalId reused from a settled run: checkpoint at its newest event
+  lastEventId = (await client.objectives.listEvents(objectiveId, { sortOrder: 'desc', limit: 1 })).items[0]?.metadata.id;
+}
+if (!settled) await watch(); // cut before the turn ended, or attached to a run still working
 
 // Follows the objective from the checkpoint until it settles.
 async function watch(): Promise<void> {
+  if (!lastEventId) {
+    // No checkpoint: a live-only stream never shows a settled objective or a pending approval, so replay first.
+    let done = false;
+    for await (const event of await client.objectives.listEvents(objectiveId, { sortOrder: 'asc' })) {
+      const s = await handle(objectiveId, event);
+      if (event.data.type === 'stateChanged') done = s; // the latest state change decides
+      lastEventId = event.metadata.id;
+    }
+    if (done) return;
+  }
   for (;;) {
     const turn = await client.objectives.streamEvents(objectiveId, undefined, { lastEventId });
     try {
@@ -198,7 +212,7 @@ await watch();
 
 `streamEvents` attaches to an existing objective. Code around these rules:
 
-- Without `lastEventId` it delivers only events that arrive after it connects. With `lastEventId` it replays everything after that event, then goes live. For an objective you have no checkpoint for, read `listEvents(id, { sortOrder: 'asc' })` first and resume from the last item's `metadata.id`.
+- Without `lastEventId` it delivers only events that arrive after it connects. With `lastEventId` it replays everything after that event, then goes live. With no checkpoint, `watch()` replays `listEvents(id, { sortOrder: 'asc' })` first and streams only if the latest `stateChanged` has not settled. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - The server never closes this stream. Break on a settling `stateChanged`, then `close()`.
 - Only persisted `objevt_` IDs are resume points. The stream also yields heartbeat (`hb_`) and delta (`dlt_`) events, and resuming from one of their IDs fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.lastEventId` holds only persisted IDs, so checkpoint with it, not with `event.metadata.id`.
 - A transport drop mid-stream reconnects from `stream.lastEventId`, up to 5 attempts per outage. Pass `{ reconnect: false }` to get `APIConnectionError` and handle drops yourself.
@@ -264,12 +278,12 @@ app.post('/cadenya', express.raw({ type: 'application/json' }), async (req, res)
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| 400 `validation failed` on `agent_id`: `agent must be published to create an objective` | Agent is `STATE_DRAFT` | `client.agents.publish(id)` |
+| 400 `validation failed` on `agent_id`: `agent must be published to create an objective` (from `createAndStream`: `validation failed` alone, since stream errors carry no details) | Agent is `STATE_DRAFT` | `client.agents.publish(id)` |
 | 400 on `spec.model_config.model_id` | wrong form, or model disabled | a `model_…` ID from `models.list({ state: 'STATE_ENABLED' })`, or `<provider-key-external-id>.<model-external-id>` |
-| 429 `the account has reached its plan's limit of N for agent_variations` | the plan caps non-archived variations across the whole account; `defaultVariation` counts | edit an existing variation, or archive unused Agents |
+| 429 `the account has reached its plan's limit of N for agent_variations` (`ENTITLEMENT_LIMIT_REACHED`) | the plan caps variations of non-archived Agents across the whole account; `defaultVariation` counts | delete unused variations, archive an unused Agent, or upgrade the plan (an unclaimed temporary account gets `REQUIRES_CLAIM` instead) |
 | 409 `resource with the same identifier already exists` | the external ID is taken | `retrieve('external_id:…')` and `update`, or `cadenya config apply` |
 | 400 `metadata.externalId is required` from `createAndStream` | no idempotency key | set `metadata.externalId` |
-| `streamEvents` yields nothing for a settled objective | no `lastEventId` | replay with `listEvents`, then stream from the last ID |
+| `streamEvents` yields nothing for a settled objective | no `lastEventId` | replay with `listEvents` and stream only if it has not settled, as `watch()` does |
 | `streamEvents` never ends | that stream never closes | break on a settling `stateChanged` and `close()` |
 | `stream already consumed` | iterated a `Stream` twice | open a new stream with `{ lastEventId: stream.lastEventId }` |
 | POST not retried | retries cover idempotent methods only | pass `{ maxRetries: n }` on that call |

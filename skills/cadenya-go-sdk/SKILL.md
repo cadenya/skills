@@ -156,7 +156,7 @@ Default: start an objective and watch it on one connection with `Objectives().Cr
 
 - `Metadata.ExternalID` is required. It is the idempotency key: repeating the request, including the SDK's automatic reconnect (which re-sends the POST), attaches to the existing objective instead of starting another.
 - The first item has `.Objective` set, and every later one has `.Event`. A reconnect sends the objective item again.
-- The server ends the stream once the objective settles: a `StateChanged` event whose `ToState` is `OBJECTIVE_STATE_WAITING` (the turn is over), `FINALIZED`, `FAILED`, `CANCELLED` or `TIMED_OUT`. Terminal states also emit their own `Finalized`, `Error`, `Cancelled` or `TimedOut` event just before it.
+- The server ends the stream once the objective settles: a `StateChanged` event whose `ToState` is `OBJECTIVE_STATE_WAITING` (the turn is over), `OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED` or `OBJECTIVE_STATE_TIMED_OUT`. Terminal states also emit their own `Finalized`, `Error`, `Cancelled` or `TimedOut` event just before it.
 
 ```go
 stream, err := client.Objectives().CreateAndStream(ctx, (&cadenya.ObjectiveCreateAndStreamBuilder{}).
@@ -197,7 +197,7 @@ last, err = watch(ctx, objectiveID, last)
 - Resume only from a durable `objevt_` ID. Heartbeat (`hb_`) and, with `IncludeDeltas`, delta (`dlt_`) events reach `Current()` but carry no SSE ID, and sending one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.LastEventID()` only ever holds a durable ID, so checkpoint with it, not `ev.Metadata.ID`.
 - Mid-stream transport drops reconnect from `LastEventID()` (5 attempts per outage). `WithReconnect(false)` returns them as errors instead.
 - Connections are cut after about 10 minutes. If that arrives as a clean end of stream, `Next()` returns false with a nil `Err()` and the SDK does not reconnect, so reopen from `LastEventID()` in an outer loop.
-- With no checkpoint, read history first with `ListEvents` (`SortOrder: cadenya.String("asc")`, then `page.All(ctx)`), as `watch` does. Streaming from `""` on an objective that has already settled waits forever, because no new event arrives.
+- With no checkpoint, read history first with `ListEvents` (`SortOrder: cadenya.String("asc")`, then `page.All(ctx)`), as `watch` does. Streaming from `""` on an objective that has already settled, or one whose approval is already pending, waits forever, because no new event arrives. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - A replayed `ToolApprovalRequested` for a call already approved makes `ApproveToolCall` fail with 400 (code 9, `not waiting for approval`); treat that as handled.
 
 ```go
@@ -281,11 +281,11 @@ Deliveries follow Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `cadenya: missing "workspaceId": pass it in params, set it on the client, or set the CADENYA_WORKSPACE_ID environment variable` | no client default and `params.WorkspaceID` is nil | `WithWorkspaceID`, `CADENYA_WORKSPACE_ID`, or set it on the params |
-| 400 `validation failed`, violation on `agent_id`: `agent must be published to create an objective` | the Agent is a draft | `Agents().Publish` |
+| 400 `validation failed`, violation on `agent_id`: `agent must be published to create an objective` (from `CreateAndStream`: `validation failed` alone, since stream errors carry no details) | the Agent is a draft | `Agents().Publish` |
 | 400 `metadata.externalId is required: …` from `CreateAndStream` | no external ID | set `Metadata.ExternalID` |
 | 400 violation on `spec.model_config.model_id` | wrong form, or the model is disabled | `model_…` from `Models().List`, or `<provider-key-external-id>.<model-external-id>` |
-| 429 `the account has reached its plan's limit of N for agent_variations` (`ENTITLEMENT_LIMIT_REACHED`) | the plan caps non-archived variations across the account, and a default variation counts | update an existing variation, or archive one |
-| `StreamEvents` yields nothing for a finished objective | no `WithLastEventID` | replay with `ListEvents`, then stream from the last ID |
+| 429 `the account has reached its plan's limit of N for agent_variations` (`ENTITLEMENT_LIMIT_REACHED`) | the plan caps variations of non-archived Agents across the account, and a default variation counts | delete unused variations, archive an unused Agent, or upgrade the plan (an unclaimed temporary account gets `REQUIRES_CLAIM` instead) |
+| `StreamEvents` yields nothing for a finished objective | no `WithLastEventID` | replay with `ListEvents` and stream only if it has not settled, as `watch` does |
 | `StreamEvents` loop never ends | the server keeps that stream open | stop on a settling `StateChanged` and `Close()` |
 | `context deadline exceeded` after 60 s | default deadline for non-stream calls when `ctx` has none | set your own deadline on `ctx` |
 | a POST is not retried | retries cover idempotent methods only | `cadenya.WithRequestRetries(n)` on that call |
