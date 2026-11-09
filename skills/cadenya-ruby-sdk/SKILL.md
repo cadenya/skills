@@ -116,6 +116,8 @@ client.agents.variations.add_assignment(agent.metadata.id, variation_id,
                                         body: { type: "toolSetId", tool_set_id: tool_set.metadata.id })
 ```
 
+Memory layers attach to variations: `client.agents.variations.add_memory_layer(agent_id, variation_id, memory_layer_id: layer.metadata.id, position: 0)`; repeating an assignment or layer is 409. Rotate a Tool Set secret with `client.tool_sets.secrets.update(tool_set_id, "MCP_TOKEN", spec: { value: ... })` (the ID accepts its uppercased name). `client.models.swap_on_variations(model_swaps: [...])` changes every variation in the workspace on that model; for one Agent, update each variation with `update_mask: "spec.modelConfig.modelId"`.
+
 To narrow the model list, `query:` matches part of the name, while `prefix:` matches only the start of the name, external ID or ID. A literal `model_id` takes the form `<provider-key-external-id>.<model-external-id>`.
 
 Other adapters: `{ type: "openapi", openapi: { type: "url", url: ... } }` (or `{ type: "uploadId", upload_id: ... }`), `{ type: "http", http: { base_url: ... } }`, `{ type: "bare", bare: {} }`. The Tool Set create loads an MCP or OpenAPI source live and fails if the source is unreachable or lists no tools. When a header names a secret that does not exist yet, the create skips that check, and the mistake surfaces later at sync.
@@ -241,6 +243,7 @@ Rules for `stream_events`, the attach-only stream:
 
 - It never ends on its own. Call `stream.close` once `handle` returns true; `each` then returns cleanly.
 - Without `last_event_id:` it delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live. With no cursor, `follow` replays `list_events(objective_id, sort_order: "asc")` through `handle` first and streams only if the latest `stateChanged` has not settled. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
+- A cursor stored by an earlier process can hang `follow` when the objective settled at or before it: `retrieve` the objective first, and if its `state` is in `SETTLED`, read `list_events(objective_id, sort_order: "asc", since_event_id: cursor)` instead. An approval requested before the cursor is not replayed (see `list_tool_calls` below). `create_and_stream` also takes `last_event_id:`.
 - Resume only from `stream.last_event_id`, never from `event.metadata.id` of a streamed event. Heartbeats (`hb_…`) and deltas (`dlt_…`, with `include_deltas: true`) carry IDs the server rejects as a cursor (400 `Last-Event-ID must be a persisted objevt_ event ID`); only `objevt_…` IDs advance `stream.last_event_id`.
 
 Both streams:

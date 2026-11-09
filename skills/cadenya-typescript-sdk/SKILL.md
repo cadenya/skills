@@ -5,7 +5,7 @@ description: Writes and debugs TypeScript or JavaScript that imports `@cadenya/c
 
 # Cadenya TypeScript SDK
 
-`@cadenya/cadenya` is generated from the Cadenya API contract, so method names, field names and enum values match the REST API: `client.<resource>.<method>(...)`. Exact signatures are in `node_modules/@cadenya/cadenya/api.md`, and every type is exported from the package root. Wire conventions shared by every client (IDs, external IDs, field masks, error codes) are in the `cadenya-api` skill.
+`@cadenya/cadenya` is generated from the Cadenya API contract, so method names, field names and enum values match the REST API: `client.<resource>.<method>(...)`. Exact signatures are in `node_modules/@cadenya/cadenya/api.md`, and every type is exported from the package root. Wire conventions shared by every client (IDs, external IDs, field masks, error codes) are in the `cadenya-api` skill, and its `references/resources.md` has the request body of every resource; SDK params use the same camelCase keys.
 
 ## Install and import
 
@@ -62,12 +62,15 @@ The full accessor and method list is in [references/resources.md](references/res
 - Unions carry a `type` tag that names the populated key: `{ type: 'mcp', mcp: { … } }`.
 - `undefined` fields are dropped. `Param` types strip read-only fields, so a fetched resource can be edited and sent back.
 - Durations are strings: `inactivityTimeout: '3600s'`.
-- Tool Set adapters: `{ type: 'mcp', mcp: { url } }`, `{ type: 'openapi', openapi: { type: 'url', url } }` (or `{ type: 'uploadId', uploadId }`), `{ type: 'http', http: { baseUrl } }`, `{ type: 'bare', bare: {} }`.
+- Tool Set adapters: `{ type: 'mcp', mcp: { url } }`, `{ type: 'openapi', openapi: { type: 'url', url } }` (or `{ type: 'uploadId', uploadId }`), `{ type: 'http', http: { baseUrl, headers } }`, `{ type: 'bare', bare: {} }`. An HTTP Tool Set has no `toolApprovals`; create each tool with `toolSets.tools.create(toolSetId, { metadata, spec: { requiresApproval, parameters, config: { type: 'http', http: { requestMethod: 'GET', path, query } } } })`, where templates read arguments as `{{ arguments.<name> }}`.
 - Secrets interpolate only as `{{ secrets.NAME }}`, from a workspace secret or the Tool Set's own `spec.secrets`. The package's doc comments mention `${SECRET_NAME}`; that form is rejected with `legacy dollar references are not supported`.
-- Tools attach to variations, not Agents. `addAssignment` takes the union itself as params: `addAssignment(agentId, variationId, { type: 'toolSetId', toolSetId })`.
+- Tools attach to variations, not Agents. `addAssignment` takes the union itself as params: `addAssignment(agentId, variationId, { type: 'toolSetId', toolSetId })`. Memory layers attach to variations too: `addMemoryLayer(agentId, variationId, { memoryLayerId, position: 0 })`. Repeating either is 409.
+- Rotate a Tool Set secret with `toolSets.secrets.update(toolSetId, 'MCP_TOKEN', { spec: { value } })`; the secret's ID accepts its uppercased name.
+- `models.swapOnVariations({ modelSwaps: [{ currentModelId, nextModelId }] })` changes every variation in the workspace on that model. For one Agent, `agents.variations.update` each variation with `updateMask: 'spec.modelConfig.modelId'`.
 
 ## Workflow: provision and run
 
+- [ ] Trust the Tool Set's host, unless Cadenya hosts it: `trustedEndpoints.create({ metadata: { name }, spec: { host } })` (409 if it exists), then `trustedEndpoints.verify({ url })` returns `result: 'RESULT_TRUSTED'`. A Tool Set on an untrusted host is rejected at create.
 - [ ] Create the Tool Set, with its secret in `spec.secrets`.
 - [ ] Pick an enabled model with `models.list`. Do not hardcode a model ID: the catalog differs per workspace and provider key.
 - [ ] Create the Agent and its default variation, with the Tool Set assigned, in one call.
@@ -119,7 +122,7 @@ await client.agents.publish(agent.metadata.id);
 
 `agents.create` returns the Agent only (`info.variationCount`, no variation ID). Get the variation with `agents.variations.list(agentId)`.
 
-Re-running this script fails with 409 `resource with the same identifier already exists`, because the external IDs are taken. Use `cadenya config apply` for repeatable setup.
+Re-running this script fails with 409 `resource with the same identifier already exists`, because the external IDs are taken. Prefer `cadenya config apply` for repeatable setup; in a script, `retrieve('external_id:…')` first and create only on 404.
 
 ## Streaming objective events
 
@@ -215,7 +218,9 @@ await watch();
 - Without `lastEventId` it delivers only events that arrive after it connects. With `lastEventId` it replays everything after that event, then goes live. With no checkpoint, `watch()` replays `listEvents(id, { sortOrder: 'asc' })` first and streams only if the latest `stateChanged` has not settled. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - The server never closes this stream. Break on a settling `stateChanged`, then `close()`.
 - Only persisted `objevt_` IDs are resume points. The stream also yields heartbeat (`hb_`) and delta (`dlt_`) events, and resuming from one of their IDs fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.lastEventId` holds only persisted IDs, so checkpoint with it, not with `event.metadata.id`.
-- A transport drop mid-stream reconnects from `stream.lastEventId`, up to 5 attempts per outage. Pass `{ reconnect: false }` to get `APIConnectionError` and handle drops yourself.
+- A transport drop mid-stream reconnects from `stream.lastEventId`, up to 5 attempts per outage, then the loop throws `APIConnectionError`. Pass `{ reconnect: false }` to get it at once and handle drops yourself.
+- `createAndStream(params, { lastEventId })` resumes an attach from a checkpoint, like `streamEvents`, and both streams have `close()`.
+- Resuming a checkpoint stored by an earlier process can hang `streamEvents` when the objective settled at or before it: `retrieve` the objective first, and if `state` is settled, read `listEvents(id, { sortOrder: 'asc', sinceEventId })` instead. An approval requested before the checkpoint is not replayed; find it with `listToolCalls(id, { status: 'TOOL_CALL_STATUS_WAITING_FOR_APPROVAL' })`.
 - Connections are cut after about 10 minutes. A clean end does not reconnect, and the loop ends without a settling event. `watch()` above reopens from the checkpoint.
 - A `Stream` can be iterated once. `stream.events()` yields `{ event, data, id }` (the SSE event name and id alongside the decoded data) instead of the data alone.
 

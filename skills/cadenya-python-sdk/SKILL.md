@@ -7,7 +7,7 @@ description: "Writes and debugs Python code that uses `cadenya`, Cadenya's offic
 
 The `cadenya` package is generated from the Cadenya OpenAPI contract: `client.<resource>.<method>(...)` maps one-to-one onto REST operations, fields and enum values. Full signatures are in the package's `api.md` (inside site-packages); response models are dataclasses in `cadenya.types`. The client is synchronous; there is no async client.
 
-Wire conventions shared by every client (IDs and external IDs, field masks, error codes, streaming semantics) are in the `cadenya-api` skill.
+Wire conventions shared by every client (IDs and external IDs, field masks, error codes, streaming semantics) are in the `cadenya-api` skill, and its `references/resources.md` has the request body of every resource; write those keys in snake_case here.
 
 ## Install and construct
 
@@ -123,6 +123,8 @@ client.agents.publish(agent.metadata.id)   # objectives on a STATE_DRAFT Agent a
 
 Other adapters: `{"type": "openapi", "openapi": {"type": "url", "url": ...}}` (or `{"type": "uploadId", "upload_id": ...}`), `{"type": "http", "http": {"base_url": ...}}`, `{"type": "bare", "bare": {}}`. `${NAME}` and `$NAME` are rejected with `legacy dollar references are not supported`. The secret can be a workspace secret (`client.workspace_secrets.create(metadata={"name": "MCP_TOKEN"}, spec={"value": os.environ["MCP_TOKEN"]})`) or a Tool Set secret in the same create (`spec={"secrets": [{"name": "MCP_TOKEN", "value": ...}], ...}`). When every referenced secret resolves, the create validates the source live and rejects one that is unreachable or lists no tools; a reference to a secret that does not exist yet skips that check.
 
+Memory layers attach to variations: `client.agents.variations.add_memory_layer(agent_id, variation_id, memory_layer_id=layer.metadata.id, position=0)`; a layer already attached is 409. Rotate a Tool Set secret with `client.tool_sets.secrets.update(tool_set_id, "MCP_TOKEN", spec={"value": ...})` (the ID accepts the secret's uppercased name). `client.models.swap_on_variations(model_swaps=[{"current_model_id": ..., "next_model_id": ...}])` changes every variation in the workspace on that model; for one Agent, `agents.variations.update` each variation with `update_mask="spec.modelConfig.modelId"`.
+
 Responses are dataclasses with snake_case attributes (`agent.metadata.external_id`, `event.data.type`). Enums are plain strings (`"STATE_PUBLISHED"`); timestamps are `datetime`.
 
 ## Reads, pagination, updates
@@ -235,7 +237,8 @@ Rules the code above depends on:
 - `stream_events` attaches to an existing objective and **never closes on its own**; stop on the settled `stateChanged`. Without `last_event_id` it delivers only events created after the connection opens; with it, the server replays everything after that ID, then goes live. With no checkpoint, `follow` replays `list_events(objective_id, sort_order="asc")` first and streams only if the latest `stateChanged` has not settled. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - Resume only from `stream.last_event_id`, never from `event.metadata.id`. Live-only `heartbeat` events (and deltas, with `include_deltas=True`) carry `hb_`/`dlt_` IDs, and resuming from one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.last_event_id` starts at the ID you passed and advances only on persisted events.
 - Mid-stream transport drops reconnect from `stream.last_event_id` (5 attempts per outage). `RequestOptions(reconnect=False)` surfaces them as `APIConnectionError` so you can resume yourself. Connections are cut after about 10 minutes. A cut that reaches the client as a clean end of stream stops the `for` loop with no reconnect, which is why `follow` reopens.
-- A stream is single-use (`stream already consumed`); open a new one with `last_event_id=stream.last_event_id`.
+- A stream is single-use (`stream already consumed`); open a new one with `last_event_id=stream.last_event_id`. `create_and_stream` takes `last_event_id=` too.
+- A checkpoint stored by an earlier process can hang `follow` when the objective settled at or before it: `retrieve` the objective first, and if its `state` is in `SETTLED`, read `list_events(objective_id, sort_order="asc", since_event_id=checkpoint)` instead of streaming. An approval requested before the checkpoint is not replayed; find it with `list_tool_calls(objective_id, status="TOOL_CALL_STATUS_WAITING_FOR_APPROVAL")`.
 - A replayed `toolApprovalRequested` for a call already approved makes `approve_tool_call` fail with 400, code 9 (`… not waiting for approval`); treat it as handled.
 - `stream.events()` yields raw `ServerSentEvent(event, data, id)` envelopes; housekeeping frames (`open`, `ping`) are skipped.
 
@@ -247,6 +250,7 @@ Use plain `objectives.create(...)` only when nothing watches the run (webhooks, 
 from cadenya import unwrap_webhook, verify_webhook, WebhookVerificationError
 
 event = client.unwrap_webhook(request.get_data(), request.headers)   # raw body bytes; secret from webhook_secret / CADENYA_WEBHOOK_SECRET
+# FastAPI/Starlette: client.unwrap_webhook(await request.body(), request.headers); any header mapping works, names are matched case-insensitively
 # event.type: "objective_event.tool_approval_requested" etc.; event.data.objective.id is the objective;
 # event.data.objective_event.data.type is the event kind (same union as the stream)
 ```

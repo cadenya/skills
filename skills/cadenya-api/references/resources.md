@@ -31,7 +31,7 @@ Placeholders: workspace `development`, AI provider key external ID `getting-star
 
 Workspace secret (`workspace_secrets`; Tool Set secret at `tool_sets/{toolSetId}/secrets`): `{"metadata": {"name": "MCP_TOKEN"}, "spec": {"value": "…"}}`.
 
-- Values are never returned. Updating with a non-empty value rotates it.
+- Values are never returned. Updating with a non-empty value rotates it. A Tool Set secret's ID also accepts its uppercased name: `PATCH …/tool_sets/support-mcp/secrets/MCP_TOKEN` `{"spec": {"value": "…"}}`. A Tool Set update with `spec.secrets` and no mask upserts the listed secrets; masking `spec.secrets` replaces the whole set.
 - Reference it as `{{ secrets.MCP_TOKEN }}`. A Tool Set can also bring its own secrets in the create body (`spec.secrets`), so a separate secret call first is optional.
 
 ## Tool Set
@@ -49,7 +49,7 @@ Workspace secret (`workspace_secrets`; Tool Set secret at `tool_sets/{toolSetId}
 
 - `spec.secrets` (`[{"name": "…", "value": "…"}]`) creates Tool Set secrets in the same call.
 - `openapi`: `{"type": "openapi", "openapi": {"type": "url", "url": "https://api.example.com/openapi.json", "headers": {…}, "baseUrl": "https://…", "serverName": "…"}}`, or `"type": "uploadId", "uploadId": "upload_…"` after an [upload](#upload). It takes the same `includeTools`, `excludeTools`, and `toolApprovals` as MCP.
-- `http`: `{"type": "http", "http": {"baseUrl": "https://api.example.com", "headers": {…}}}`, then create each [tool](#tool) yourself.
+- `http`: `{"type": "http", "http": {"baseUrl": "https://api.example.com", "headers": {"Authorization": "Bearer {{ secrets.API_TOKEN }}"}}}`, then create each [tool](#tool) yourself. HTTP has no `toolApprovals`; set `requiresApproval` per tool.
 - `bare`: `{"type": "bare", "bare": {"contentTimeout": "300s"}}`. Calls park until you `:setContent` (default wait 24h).
 - MCP and OpenAPI sources are fetched on create, and a source that lists zero tools blocks the write. When a header references a secret that does not exist yet, that check is skipped and the source syncs once the secret exists. Sources re-sync hourly.
 - Synced Tool Sets reject manual tool create, update and delete. Curate with `includeTools`/`excludeTools`, `toolApprovals` (`{"type": "always", "always": true}` or `{"type": "only", "only": <filter>}`), and per-tool `:omit`/`:restore`.
@@ -65,8 +65,11 @@ Workspace secret (`workspace_secrets`; Tool Set secret at `tool_sets/{toolSetId}
 {"metadata": {"name": "createTicket"},
  "spec": {"description": "Open a ticket", "requiresApproval": true,
    "parameters": {"type": "object", "properties": {"subject": {"type": "string"}}, "required": ["subject"]},
-   "config": {"type": "http", "http": {"requestMethod": "POST", "path": "/tickets", "requestBodyContentType": "application/json", "requestBodyTemplate": "{\"subject\": \"{{ subject }}\"}"}}}}
+   "config": {"type": "http", "http": {"requestMethod": "POST", "path": "/tickets", "requestBodyContentType": "application/json", "requestBodyTemplate": "{\"subject\": {{ arguments.subject | sanitized_json }}}"}}}}
 ```
+
+- `path`, `query` (without the `?`), the tool's own `headers` and `requestBodyTemplate` are Liquid over the call's arguments as `arguments.<name>`: `"path": "/tickets/{{ arguments.id }}"`, `"query": "status=open&date={{ arguments.date | url_encode }}"`. `sanitized_json` writes a JSON literal. A bare `{{ subject }}` renders empty.
+- Secrets resolve only in the Tool Set's `http.headers` and `baseUrl`, not in the tool's config.
 
 Bare tools use `"config": {"type": "bare", "bare": {"alwaysSetResult": "Chart rendered."}}` to return fixed content instead of parking.
 
@@ -88,6 +91,7 @@ Bare tools use `"config": {"type": "bare", "bare": {"alwaysSetResult": "Chart re
 ```
 
 - `modelId` is `<provider-key-externalId>.<model-externalId>` or a canonical `model_…` ID. Do not guess it: read the provider key's `metadata.externalId` from `GET …/ai_provider_keys` (for example `getting-started-key`), list models with `GET …/models?state=STATE_ENABLED` (filters: `query=` name contains, `prefix=` start of name, external ID or ID, `aiProviderKeyId=`), and use a returned model's `metadata.id`, or join the key's and the model's external IDs with a period. A model's external ID alone is not a valid `modelId`. Omit `modelId` on create to use the workspace default model; with no default the create is a 400 (`model_id is required; no default model is configured for this workspace`).
+- `models:swapModelOnVariations` moves every variation in the workspace that uses `currentModelId`, in the background. To change one Agent only, PATCH each of its variations with `updateMask: "spec.modelConfig.modelId"`.
 - Each model has `spec.provider`, `spec.family`, and `spec.capabilities`. Sampling knobs (such as `temperature`) are rejected when the model lacks the capability.
 - Templates are Liquid; `{% %}` tags are allowed in prompts (not in headers). `spec.systemPromptDataSchema` (JSON Schema) validates `systemPromptData` and doubles as the tool schema when the Agent is a sub-agent. `spec.outputDefinition` (JSON Schema) makes objectives finalize with structured `output`.
 - `spec.variationSelectionMode` is optional; unset means `VARIATION_SELECTION_MODE_WEIGHTED` (Thompson sampling on feedback).
@@ -102,7 +106,7 @@ Assignments live in the variation spec:
 - `spec.assignments`: `toolSetId`, `toolId`, `subAgentId` (another Agent as a tool), or `agentPoolId`.
 - `spec.memoryLayerAssignments`: `{memoryLayerId, position}`, at most 10; the lower position is consulted first.
 
-Reads always return both, and `info.assignmentMetadata` names the targets. Replace the set with a masked PATCH (`updateMask: "spec.assignments"`), or change one target with `POST …/variations/{id}:addAssignment` / `:removeAssignment` `{"type": "toolSetId", "toolSetId": "support-mcp"}` and `:addMemoryLayer` / `:updateMemoryLayer` `{"memoryLayerId": "…", "position": 0}` (position optional on add, required on update) or `:removeMemoryLayer` `{"memoryLayerId": "…"}`. Each returns the updated variation.
+Memory layers attach to variations, not Agents. Reads always return both, and `info.assignmentMetadata` names the targets. Replace the set with a masked PATCH (`updateMask: "spec.assignments"`), or change one target with `POST …/variations/{id}:addAssignment` / `:removeAssignment` `{"type": "toolSetId", "toolSetId": "support-mcp"}` and `:addMemoryLayer` / `:updateMemoryLayer` `{"memoryLayerId": "…", "position": 0}` (position optional on add, required on update) or `:removeMemoryLayer` `{"memoryLayerId": "…"}`. Each returns the updated variation. Adding a target that is already there is 409, so a re-run should check the variation first.
 
 ## Agent pool
 

@@ -5,7 +5,7 @@ description: "Writes and debugs Go code that imports `go.cadenya.com/cadenya-go`
 
 # Cadenya Go SDK
 
-`go.cadenya.com/cadenya-go` (package `cadenya`) is generated from the Cadenya OpenAPI contract, so accessors, methods, fields, and enum values match the REST API one-to-one. Every signature is in the module's `api.md`; `go doc go.cadenya.com/cadenya-go` lists the types. Wire conventions shared by every client (IDs and external IDs, field masks, error codes, streaming semantics) are in the `cadenya-api` skill.
+`go.cadenya.com/cadenya-go` (package `cadenya`) is generated from the Cadenya OpenAPI contract, so accessors, methods, fields, and enum values match the REST API one-to-one. Every signature is in the module's `api.md`; `go doc go.cadenya.com/cadenya-go` lists the types. Wire conventions shared by every client (IDs and external IDs, field masks, error codes, streaming semantics) are in the `cadenya-api` skill, and its `references/resources.md` has the JSON body of every resource, which the params structs mirror.
 
 ## Install and construct
 
@@ -109,6 +109,8 @@ _, err = client.Agents().Variations().AddAssignment(ctx, agent.Metadata.ID, vari
 _, err = client.Agents().Publish(ctx, agent.Metadata.ID, nil)
 ```
 
+Memory layers attach to variations like Tool Sets: `Agents().Variations().AddMemoryLayer(ctx, agentID, variationID, &cadenya.AgentVariationAddMemoryLayerParams{MemoryLayerID: layerID})`; repeating an assignment or layer is 409. `Models().SwapOnVariations` changes every variation in the workspace on that model; for one Agent, update each variation with `UpdateMask: cadenya.String("spec.modelConfig.modelId")`.
+
 Tool Set create resolves the headers and checks the source live; an unreachable source or one with no tools is rejected. The check is skipped while a referenced secret is undefined, so a misspelled secret name is not caught at create. Doc comments inside the module that show `${SECRET_NAME}` are stale.
 
 ## Lists and updates
@@ -199,6 +201,7 @@ last, err = watch(ctx, objectiveID, last)
 - Connections are cut after about 10 minutes. If that arrives as a clean end of stream, `Next()` returns false with a nil `Err()` and the SDK does not reconnect, so reopen from `LastEventID()` in an outer loop.
 - With no checkpoint, read history first with `ListEvents` (`SortOrder: cadenya.String("asc")`, then `page.All(ctx)`), as `watch` does. Streaming from `""` on an objective that has already settled, or one whose approval is already pending, waits forever, because no new event arrives. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
 - A replayed `ToolApprovalRequested` for a call already approved makes `ApproveToolCall` fail with 400 (code 9, `not waiting for approval`); treat that as handled.
+- A checkpoint stored by an earlier process can hang `watch` when the objective settled at or before it: `Objectives().Retrieve` first, and if `State` is settled, read `ListEvents` with `SinceEventID: cadenya.String(last)` instead of streaming. An approval requested before the checkpoint is not replayed; find it with `ListToolCalls(ctx, objectiveID, &cadenya.ObjectiveListToolCallsParams{Status: cadenya.Ptr(cadenya.ObjectiveServiceListObjectiveToolCallsStatusToolCallStatusWaitingForApproval)})`.
 
 ```go
 // watch follows an existing objective until it settles and returns the new checkpoint.

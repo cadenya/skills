@@ -33,7 +33,7 @@ A person creates the account at https://app.cadenya.com/signup; the Free plan ne
 - `cadenya auth status` names the credential source in effect, and exits 0 even when that credential is bad. `cadenya whoami --display json` is the pre-flight check: it exits 1 on a rejected credential.
 - `--profile <name>` on any command (including `auth login`) keeps separate logins and stored defaults.
 
-**Workspace, first match wins:** `--workspace-id`, then `CADENYA_WORKSPACE_ID`, then `cadenya config set workspace-id <id>`, then the login's single authorized workspace. Each accepts a workspace ID (`workspace_…`) or its external ID (`development`). `cadenya workspaces list` shows what the credential reaches; `cadenya config list` shows effective values and their sources.
+**Workspace, first match wins:** `--workspace-id`, then `CADENYA_WORKSPACE_ID`, then `cadenya config set workspace-id <id>`, then the login's single authorized workspace. With a temporary workspace's key, the workspace in `.cadenya/temporary.json` replaces the last two; leave `CADENYA_WORKSPACE_ID` unset there and skip the `export` lines below. Each accepts a workspace ID (`workspace_…`) or its external ID (`development`). `cadenya workspaces list` shows what the credential reaches; `cadenya config list` shows effective values and their sources.
 
 ## Workspace configuration files
 
@@ -160,7 +160,7 @@ Errors go to stderr as the API's `google.rpc.Status`: `error: cadenya: <message>
 ## Bootstrap a Tool Set and an Agent
 
 - [ ] Workspace secret, referenced later as `{{ secrets.MCP_TOKEN }}`. Read the value from a file, not the command line. Create it before the Tool Set so the create can check the MCP source; while a referenced secret is missing, that check is skipped.
-- [ ] Tool Set, built with `--dry-run` first. Verify: `tool-sets tools list support-mcp --display json` lists the synced tools once the sync has run.
+- [ ] Tool Set, built with `--dry-run` first. Verify: `tool-sets tools list support-mcp --display json` lists the synced tools. The first sync runs in the background after the create, so poll until `.items` is non-empty; `tool-sets list-events support-mcp` shows a failed sync.
 - [ ] Model ID from `models list`. Never hardcode a model slug: which models exist depends on the account's provider keys.
 - [ ] Agent with its default variation. Verify: `agents variations list support-triager`.
 - [ ] Assign the Tool Set to the variation (tools are assigned to variations, not Agents).
@@ -197,7 +197,7 @@ cadenya agents retrieve support-triager --display json | jq -r .state
 ```
 
 - `agents create` returns the Agent, not the variation. Omitting `--default-variation-model-id` uses the workspace default model, and fails if none is configured.
-- To make the bootstrap re-runnable, gate each create on `retrieve <external-id>` (exit 1 on 404). A duplicate external ID fails with `resource with the same identifier already exists (http 409, code 6)`.
+- To make the bootstrap re-runnable, gate each create on `retrieve <external-id>` (exit 1 on 404). A duplicate external ID fails with `resource with the same identifier already exists (http 409, code 6)`. A repeated `add-assignment` also fails with 409 (`tool set … already assigned to variation`), so check `agents variations retrieve … --display json | jq .spec.assignments` first. `publish` on a published Agent succeeds and changes nothing.
 - OpenAPI Tool Sets use `--openapi-url` (or `--openapi-upload-id` after `uploads create`). HTTP Tool Sets use `--http-base-url` plus `tool-sets tools create` per tool. Bare Tool Sets (`--adapter bare`) park each call until you `set-tool-call-content`.
 
 ## Run an objective
