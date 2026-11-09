@@ -17,7 +17,7 @@ For raw HTTP routes and the error envelope, see cadenya-api. For client setup, p
 2. A Widget, created server-side (key with `widgets:manage`), with the exact origins of every page that embeds it.
 3. A backend route that authenticates the visitor and calls `widgetSessions.create` (key with `widget_sessions:manage` **and** `objectives:manage`).
 4. A page that renders `CadenyaWidgetProvider` with the returned host and token, and a `getToken` that calls that route again.
-5. Revocation on logout, and `deleteTenant` for erasure requests.
+5. Revocation on logout, and `tenants.delete` for erasure requests.
 6. Check: a message sent from an allowlisted origin gets a reply.
 
 ## 1. Prerequisites: the Agent and the Widget
@@ -132,7 +132,7 @@ export function SupportChat() {
 - The panel fills its container, so give the container a definite height.
 - The Widgets Tools template (`<WidgetTools>` from `@cadenya/widgets-ui-react/widget-tools`) and page tools must share one `PageToolsProvider` with the panel. See the [Widget quickstart](https://cadenya.com/docs/guides/getting-started/widget-quickstart.md). Client tools are in [Widgets: page tools and client tools](https://cadenya.com/docs/guides/the-basics/widgets.md).
 - For a custom UI, use `@cadenya/widgets` (a dependency of the kit): ``new CadenyaWidgets({ apiKey: token, baseURL: `https://${host}` })``.
-- To renew a token without going back to your backend, call `widgets.session.renewWidget({ workspaceId })` on that `CadenyaWidgets` client before `tokenExpiresAt`. `workspaceId` is the session's `metadata.workspaceId`, so return it from your mint route. Renewal accepts a token at most 60 seconds past expiry, allows 30 renewals per minute, and keeps the same session and deadline. The React kit does not call it.
+- To renew a token without going back to your backend, call `client.session.renewWidget({ workspaceId })` on that `CadenyaWidgets` client before `tokenExpiresAt`. It returns new credentials. The client's `apiKey` is fixed at construction, so pass `fetch: auth.fetch` from the kit's `createAuthFetch({ token })` and call `auth.setToken(renewed.token)`. `workspaceId` is the session's `metadata.workspaceId`, so return it from your mint route. Renewal accepts a token at most 60 seconds past expiry, allows 30 renewals per minute, and keeps the same session and deadline. The React kit does not call it.
 
 ## 4. Tenant and subject isolation
 
@@ -145,17 +145,18 @@ export function SupportChat() {
 
 | Goal | Call | Effect |
 | --- | --- | --- |
-| End all of a user's sessions (logout) | `list({ widgetId, tenantId: "external_id:<org>", subjectId: "external_id:<user>", state: "STATE_ACTIVE" })`, then `revoke` each | `subjectId` in the external-ID form needs `tenantId`. Every re-mint is a new session, so revoke them all. |
+| End all of a user's sessions (logout) | `list({ tenantId: "external_id:<org>", subjectId: "external_id:<user>", state: "STATE_ACTIVE" })`, then `revoke` each | Covers every Widget; add `widgetId` to limit it to one. `subjectId` in the external-ID form needs `tenantId`. Every re-mint is a new session, so revoke them all. |
 | End one session now (incident) | `widgetSessions.revoke(id)` | `STATE_REVOKED`. Its tokens fail with 401 and its secrets are deleted. Repeat calls succeed. |
-| Remove a session record | `widgetSessions.delete(id)` | Its conversations are kept but no longer linked to any session, so a later `deleteTenant` does not erase them. For erasure, use `deleteTenant` first. |
-| Erasure request for a tenant | `widgetSessions.deleteTenant({ tenantId: "external_id:<org>" })` | Deletes the tenant's sessions **and their conversations** on every Widget. Each call deletes at most 10,000 sessions, so repeat until `sessionsDeleted` is 0. |
+| Remove a session record | `widgetSessions.delete(id)` | Its conversations are kept but no longer linked to any session, so a later `deleteTenant` does not erase them (`tenants.delete` still does). |
+| Delete a tenant's widget data | `widgetSessions.deleteTenant({ tenantId: "external_id:<org>" })` | Deletes the tenant's sessions **and their conversations** on every Widget. The tenant and subject records (with their names) remain. Each call deletes at most 10,000 sessions, so repeat until `sessionsDeleted` is 0. |
+| Erasure request for a tenant | `tenants.delete("external_id:<org>")` (key with `tenants:manage`) | Erases the tenant, its subjects, its sessions and every conversation tied to it, in the background. It returns `STATE_ERASING`; `tenants.retrieve` returns 404 when done. Mints for that tenant fail meanwhile. This cannot be undone. |
 | Turn off a Widget | `widgets.archive(id)` | The host returns 404 and its sessions are revoked. `unarchive` does not restore them, so mint new sessions. |
 
-Ending your app's own login does not invalidate widget tokens. Revoke the session, and make the mint route refuse signed-out users; otherwise `getToken` mints a new session.
+Ending your app's own login does not invalidate widget tokens. End your app session first, so the mint route refuses the user, then revoke; otherwise `getToken` mints a new session. If the user never opened a Widget, `list` returns `400 validation failed` (`tenant does not exist in this workspace` or `subject does not exist in this workspace`); treat that as nothing to revoke.
 
 ```ts
 for await (const s of await client.widgetSessions.list({
-  widgetId: "external_id:support-chat", tenantId: `external_id:${orgId}`,
+  tenantId: `external_id:${orgId}`,
   subjectId: `external_id:${userId}`, state: "STATE_ACTIVE",
 })) await client.widgetSessions.revoke(s.metadata.id);
 ```
@@ -178,7 +179,7 @@ for await (const s of await client.widgetSessions.list({
 | `400 validation failed`, `spec.widgetId`: `widget does not exist in this workspace` / `archived widgets cannot mint sessions; unarchive the widget first` | Wrong workspace or ID, or the Widget is archived. |
 | `400 validation failed` on `spec.tenant` or `spec.subject` | One of them is missing or does not match `[A-Za-z0-9._-]{1,64}`. |
 | `400 Session expiry must be in the future` | `spec.expiresAt` is in the past. |
-| `429 the account has reached its plan's limit of N for widgets` (`ENTITLEMENT_LIMIT_REACHED`) | Archive or delete an unused Widget, or raise the plan. |
+| `429 the account has reached its plan's limit of N for widgets` (`ENTITLEMENT_LIMIT_REACHED`) | Archive or delete an unused Widget, or raise the plan. An unclaimed temporary account gets `REQUIRES_CLAIM` instead. |
 | `400 validation failed`, `agent_id`: `agent must be published to create an objective` | The Widget's Agent is a draft. Publish it. |
 | `403 Session cannot create or continue conversations` / `Widget session cannot read conversations` | The minting key lacks `objectives:manage` / `objectives:read`. Add the scope and mint a new session; the old session keeps its frozen scopes. |
 | `401 Widget access token expired` (`TOKEN_EXPIRED`) | The token is past its expiry. Provide `getToken`, or renew before `tokenExpiresAt`. |
@@ -187,7 +188,7 @@ for await (const s of await client.widgetSessions.list({
 | `403` with `SESSION_REVOKED` (`Widget session revoked`, `Widget session authorization revoked`) | The session was revoked, or its Widget, workspace or minting API key no longer authorizes it (archived, deleted, disabled, or removed from the workspace). Mint with a valid key on an active Widget. |
 | `429 Widget session has spent its message allowance` or `Widget session exhausted` (`SESSION_EXHAUSTED`) | The session reached 200 messages. Minting a new session is an explicit app decision. |
 | `Widget session requires tenant and subject identity; create a new session` | A legacy session without identity. Mint a new one. |
-| `429 Widget session renewal rate limit exceeded` (`RATE_LIMITED`) | More than 30 renewals per minute. Honor `Retry-After`. |
+| `429 Widget session renewal rate limit exceeded` (`RATE_LIMITED`) | More than 30 renewals per minute. Wait for the `RetryInfo` delay in the error details; browsers cannot read the `Retry-After` header cross-origin. |
 | `503 This assistant is temporarily unavailable. Please try again later.` | The account's plan refused the visitor's request. Check the plan and usage. |
 | Server-side `403` with reason `SCOPE_MISSING` | The key lacks the scope for that call: `widgets:read`/`:manage` or `widget_sessions:read`/`:manage`. |
 

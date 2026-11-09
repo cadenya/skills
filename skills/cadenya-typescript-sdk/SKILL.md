@@ -163,30 +163,37 @@ const stream = await client.objectives.createAndStream({
   firstUserMessage: 'Summarize the open tickets.',
 });
 let objectiveId = '';
+let settled = false;
 for await (const frame of stream) {
-  if (frame.type === 'objective') objectiveId = frame.objective.metadata.id;
-  else await handle(objectiveId, frame.event);
+  if (frame.type === 'objective') {
+    objectiveId = frame.objective.metadata.id;
+    settled = SETTLED.has(frame.objective.state); // a repeat that attaches to a settled objective gets no events
+  } else settled = await handle(objectiveId, frame.event);
 }
 let lastEventId = stream.lastEventId; // checkpoint for the next turn
+if (!settled) await watch(); // the connection was cut before the turn ended
+
+// Follows the objective from the checkpoint until it settles.
+async function watch(): Promise<void> {
+  for (;;) {
+    const turn = await client.objectives.streamEvents(objectiveId, undefined, { lastEventId });
+    try {
+      for await (const event of turn) {
+        if (await handle(objectiveId, event)) return;
+      }
+    } finally {
+      lastEventId = turn.lastEventId;
+      await turn.close();
+    }
+  }
+}
 ```
 
-To send the next turn, call `continue`, then watch with `streamEvents` from the checkpoint:
+To send the next turn, wait until the current one has settled, call `continue`, then `watch()` again:
 
 ```ts
 await client.objectives.continue(objectiveId, { message: 'Which one is most urgent?' });
-
-let settled = false;
-while (!settled) {
-  const turn = await client.objectives.streamEvents(objectiveId, undefined, { lastEventId });
-  try {
-    for await (const event of turn) {
-      if (await handle(objectiveId, event)) { settled = true; break; }
-    }
-  } finally {
-    lastEventId = turn.lastEventId;
-    await turn.close();
-  }
-}
+await watch();
 ```
 
 `streamEvents` attaches to an existing objective. Code around these rules:
@@ -195,8 +202,8 @@ while (!settled) {
 - The server never closes this stream. Break on a settling `stateChanged`, then `close()`.
 - Only persisted `objevt_` IDs are resume points. The stream also yields heartbeat (`hb_`) and delta (`dlt_`) events, and resuming from one of their IDs fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.lastEventId` holds only persisted IDs, so checkpoint with it, not with `event.metadata.id`.
 - A transport drop mid-stream reconnects from `stream.lastEventId`, up to 5 attempts per outage. Pass `{ reconnect: false }` to get `APIConnectionError` and handle drops yourself.
-- Connections are cut after about 10 minutes. A clean end does not reconnect, and the loop ends without a settling event. The outer `while` above reopens from the checkpoint.
-- A `Stream` can be iterated once. `stream.events()` yields the raw `{ event, data, id }` envelopes instead of decoded events.
+- Connections are cut after about 10 minutes. A clean end does not reconnect, and the loop ends without a settling event. `watch()` above reopens from the checkpoint.
+- A `Stream` can be iterated once. `stream.events()` yields `{ event, data, id }` (the SSE event name and id alongside the decoded data) instead of the data alone.
 
 ## Reads, pagination and updates
 

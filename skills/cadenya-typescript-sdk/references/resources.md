@@ -6,7 +6,7 @@ Every accessor on the client and its methods. Exact signatures are in `node_modu
 | --- | --- |
 | `accounts` | `retrieve`, `rotateChallengeToken`, `rotateWebhookSigningKey` |
 | `profiles` | `whoami` |
-| `workspaces` | `list`, `retrieveTemporary` |
+| `workspaces` | `list` |
 | `workspaceAdmin` | `listAccount`, `create`, `retrieve`, `update`, `archive`, `listMembers`, `addMember`, `removeMember`, `listProfiles` |
 | `apiKeys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `addWorkspace`, `removeWorkspace` (account keys) |
 | `aiProviderKeys` | CRUD |

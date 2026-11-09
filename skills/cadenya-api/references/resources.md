@@ -87,7 +87,7 @@ Bare tools use `"config": {"type": "bare", "bare": {"alwaysSetResult": "Chart re
             "memoryLayerAssignments": [{"memoryLayerId": "runbooks", "position": 0}]}}}
 ```
 
-- `modelId` is `<provider-key-externalId>.<model-externalId>` or a canonical `model_…` ID. Do not guess it: read the provider key's `metadata.externalId` from `GET …/ai_provider_keys` (for example `getting-started-key`), list models with `GET …/models?state=STATE_ENABLED` (filters: `query=` name contains, `prefix=` start of name, external ID or ID, `aiProviderKeyId=`), and copy a returned model's `metadata.externalId` or `metadata.id`. Omit `modelId` on create to use the workspace default model; with no default the create is a 400 (`model_id is required; no default model is configured for this workspace`).
+- `modelId` is `<provider-key-externalId>.<model-externalId>` or a canonical `model_…` ID. Do not guess it: read the provider key's `metadata.externalId` from `GET …/ai_provider_keys` (for example `getting-started-key`), list models with `GET …/models?state=STATE_ENABLED` (filters: `query=` name contains, `prefix=` start of name, external ID or ID, `aiProviderKeyId=`), and use a returned model's `metadata.id`, or join the key's and the model's external IDs with a period. A model's external ID alone is not a valid `modelId`. Omit `modelId` on create to use the workspace default model; with no default the create is a 400 (`model_id is required; no default model is configured for this workspace`).
 - Each model has `spec.provider`, `spec.family`, and `spec.capabilities`. Sampling knobs (such as `temperature`) are rejected when the model lacks the capability.
 - Templates are Liquid; `{% %}` tags are allowed in prompts (not in headers). `spec.systemPromptDataSchema` (JSON Schema) validates `systemPromptData` and doubles as the tool schema when the Agent is a sub-agent. `spec.outputDefinition` (JSON Schema) makes objectives finalize with structured `output`.
 - `spec.variationSelectionMode` is optional; unset means `VARIATION_SELECTION_MODE_WEIGHTED` (Thompson sampling on feedback).
@@ -102,7 +102,7 @@ Assignments live in the variation spec:
 - `spec.assignments`: `toolSetId`, `toolId`, `subAgentId` (another Agent as a tool), or `agentPoolId`.
 - `spec.memoryLayerAssignments`: `{memoryLayerId, position}`, at most 10; the lower position is consulted first.
 
-Reads always return both, and `info.assignmentMetadata` names the targets. Replace the set with a masked PATCH (`updateMask: "spec.assignments"`), or change one target with `POST …/variations/{id}:addAssignment` / `:removeAssignment` `{"type": "toolSetId", "toolSetId": "support-mcp"}` and `:addMemoryLayer` / `:updateMemoryLayer` / `:removeMemoryLayer` `{"memoryLayerId": "…", "position": 0}`. Each returns the updated variation.
+Reads always return both, and `info.assignmentMetadata` names the targets. Replace the set with a masked PATCH (`updateMask: "spec.assignments"`), or change one target with `POST …/variations/{id}:addAssignment` / `:removeAssignment` `{"type": "toolSetId", "toolSetId": "support-mcp"}` and `:addMemoryLayer` / `:updateMemoryLayer` `{"memoryLayerId": "…", "position": 0}` (position optional on add, required on update) or `:removeMemoryLayer` `{"memoryLayerId": "…"}`. Each returns the updated variation.
 
 ## Agent pool
 

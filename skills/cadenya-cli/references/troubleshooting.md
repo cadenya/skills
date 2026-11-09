@@ -1,6 +1,6 @@
 # Troubleshooting CLI errors
 
-Errors print to stderr as `error: cadenya: <message> (http <status>, code <grpc-code>)`, followed by the `details` list. Errors on stream commands carry only the message, with no details.
+Errors print to stderr as `error: cadenya: <message> (http <status>, code <grpc-code>)`, followed by the `details` list. Errors on stream commands carry only the message, as `(http <status>, code 0)` with no details, so a field violation reads as a bare `validation failed`.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
@@ -9,7 +9,7 @@ Errors print to stderr as `error: cadenya: <message> (http <status>, code <grpc-
 | `admin role required (http 403, code 7)`, reason `ADMIN_ROLE_REQUIRED` | `workspace-admin` commands need the account admin role | use an admin profile, or the non-admin `workspaces list` |
 | `not found (http 404, code 5)` on a resource you can see in the UI | wrong workspace, or an external ID that was never set | check `cadenya config list`; pass `--workspace-id`; use `external_id:` |
 | `validation failed (http 400, code 3)` with `fieldViolations` | body rejected server-side; `field` names the proto path | fix that field; `--dry-run` to inspect what was sent |
-| `validation failed` with field `agent_id`: `agent must be published to create an objective` | the Agent is `STATE_DRAFT` | `cadenya agents publish <agent>` |
+| `validation failed` with field `agent_id`: `agent must be published to create an objective` (on `create-and-stream`: `validation failed (http 400, code 0)` alone) | the Agent is `STATE_DRAFT` | `cadenya agents publish <agent>` |
 | `model_id must be a reference key in the form <provider-key-slug>.<model-slug> or a canonical model_ ID` | wrong `modelId` form | take `metadata.id` from `models list --state STATE_ENABLED --display json` |
 | `model_id is required; no default model is configured for this workspace` | `modelId` omitted and the workspace has no default model | pass a model ID from `models list` |
 | `resource with the same identifier already exists (http 409, code 6)` | a create reused an external ID | `retrieve <external-id>` and update it instead |

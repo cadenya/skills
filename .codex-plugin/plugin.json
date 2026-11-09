@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "Cadenya",
     "shortDescription": "Build and run agents on Cadenya",
-    "longDescription": "Create Tool Sets and Agents, run and stream objectives, approve tool calls, and embed Widgets on Cadenya, the hosted agent runtime. Includes Skills for the Cadenya API, CLI, and TypeScript SDK, plus the hosted Cadenya MCP server.",
+    "longDescription": "Create Tool Sets and Agents, run and stream objectives, approve tool calls, and embed Agents in web apps with Widgets on Cadenya, the hosted agent runtime. Includes Skills for the Cadenya API, CLI, and TypeScript, Go, Python, and Ruby SDKs, Widgets, and starting without an account, plus the hosted Cadenya MCP server.",
     "developerName": "Cadenya",
     "category": "Developer Tools",
     "capabilities": [

@@ -180,7 +180,8 @@ cadenya tool-sets tools list support-mcp --display json | jq -r '.items[].metada
 
 # Pick an enabled model; add --query <text> to match by name. Use its canonical model_ ID.
 cadenya models list --state STATE_ENABLED --display json | jq -r '.items[] | [.metadata.id, .metadata.name] | @tsv'
-model=$(cadenya models list --state STATE_ENABLED --limit 1 --display json | jq -r '.items[0].metadata.id')
+model=$(cadenya models list --state STATE_ENABLED --limit 1 --display json | jq -r '.items[0].metadata.id // empty')
+: "${model:?no enabled model in this workspace}"
 
 # The system prompt is a Liquid template over system_prompt_data.
 cadenya agents create --name "Support Triager" --external-id support-triager \
@@ -191,7 +192,7 @@ cadenya agents create --name "Support Triager" --external-id support-triager \
 cadenya agents variations list support-triager
 
 cadenya agents variations add-assignment support-triager support-triager-default --tool-set-id support-mcp
-cadenya agents publish support-triager   # objectives on a STATE_DRAFT Agent fail with "agent must be published to create an objective"
+cadenya agents publish support-triager   # on a STATE_DRAFT Agent, objectives create fails with "agent must be published to create an objective"; create-and-stream says only "validation failed"
 cadenya agents retrieve support-triager --display json | jq -r .state
 ```
 
@@ -201,27 +202,30 @@ cadenya agents retrieve support-triager --display json | jq -r .state
 
 ## Run an objective
 
-Default to `objectives create-and-stream`. It creates the objective and streams its events on one connection, so no event is missed, and **the stream ends on its own** once the objective reaches `OBJECTIVE_STATE_WAITING` (the turn is over) or a terminal state. `--external-id` is required and is the idempotency key: rerunning with the same external ID attaches to the existing objective instead of creating another, and `--last-event-id` then resumes after that event.
+Default to `objectives create-and-stream`. It creates the objective and streams its events on one connection, so no event is missed, and **the stream ends on its own** once the objective reaches `OBJECTIVE_STATE_WAITING` (the turn is over) or a terminal state. `--external-id` is required and is the idempotency key: rerunning with the same external ID attaches to the existing objective instead of creating another, and `--last-event-id` then resumes after that event. An attach without `--last-event-id` sends only new events, so approve anything already pending (`list-tool-calls --status TOOL_CALL_STATUS_WAITING_FOR_APPROVAL`) or the stream waits on it.
 
 - Each stdout line is NDJSON. The first is `{"type":"objective","objective":{…}}`; every later line is `{"type":"event","event":{…}}`.
 - The end-of-turn signal is a `stateChanged` event with `toState: OBJECTIVE_STATE_WAITING`. Terminal states are `OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED`, and `OBJECTIVE_STATE_TIMED_OUT`.
 - Only durable `objevt_…` IDs are resume cursors. Heartbeats (`hb_…`) and `--include-deltas` fragments (`dlt_…`) are not; resuming from one fails with `Last-Event-ID must be a persisted objevt_ event ID`.
 - Connections are cut after about 10 minutes. The CLI reconnects by itself from the last event ID it saw (up to 5 attempts). If the command still exits before the turn ends, rerun it with `--last-event-id` set to the last `objevt_` ID.
-- `continue` needs `OBJECTIVE_STATE_WAITING` unless you pass `--enqueue`. `cancel` and `interrupt` are asynchronous: `interrupt` stops foreground work and leaves the objective WAITING, and `cancel` ends it.
+- `continue` needs `OBJECTIVE_STATE_WAITING` unless you pass `--enqueue`. `cancel` and `interrupt` are asynchronous: `interrupt` stops foreground work and leaves the objective WAITING (PENDING when `--enqueue` messages are queued), and `cancel` ends it.
 
 ```sh
 #!/usr/bin/env bash
 set -euo pipefail
 export CADENYA_WORKSPACE_ID=development
 ext="ticket-4821"   # stable per unit of work: a rerun attaches instead of duplicating
-obj="" last="" state=""
+obj="" last="" state="" opened=""
 
 # Stream one turn: create (or rejoin) the objective and read until the stream ends.
 turn() {
   state=""
   for _ in 1 2 3 4 5; do
+    opened=""
     while IFS= read -r line; do
-      if [ "$(jq -r .type <<<"$line")" = objective ]; then obj=$(jq -r .objective.metadata.id <<<"$line"); continue; fi
+      if [ "$(jq -r .type <<<"$line")" = objective ]; then   # current state too: an attach to a settled objective sends no events
+        opened=1 obj=$(jq -r .objective.metadata.id <<<"$line") state=$(jq -r .objective.state <<<"$line"); continue
+      fi
       ev=$(jq -c .event <<<"$line")
       id=$(jq -r .metadata.id <<<"$ev"); [[ $id == objevt_* ]] && last=$id
       case "$(jq -r .data.type <<<"$ev")" in
@@ -233,7 +237,8 @@ turn() {
     done < <(cadenya objectives create-and-stream --agent-id support-triager --external-id "$ext" \
       --system-prompt-data customer_name=Ada --first-user-message "Summarize the open tickets." \
       ${last:+--last-event-id "$last"})
-    case "$state" in OBJECTIVE_STATE_PENDING|OBJECTIVE_STATE_RUNNING|"") ;; *) return 0 ;; esac
+    [ -n "$opened" ] || return 1   # rejected before streaming (draft Agent, auth): the error is on stderr
+    case "$state" in OBJECTIVE_STATE_PENDING|OBJECTIVE_STATE_RUNNING|OBJECTIVE_STATE_INTERRUPTING) ;; *) return 0 ;; esac
   done
   echo "stream ended before the turn did (last event $last)" >&2; return 1
 }

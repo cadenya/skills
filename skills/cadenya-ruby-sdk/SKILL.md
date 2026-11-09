@@ -49,7 +49,7 @@ client.objectives.continue(objective_id, message: "…")
 | --- | --- |
 | `accounts` | `retrieve`, `rotate_challenge_token`, `rotate_webhook_signing_key` |
 | `profiles` | `whoami` |
-| `workspaces` | `list`, `retrieve_temporary` |
+| `workspaces` | `list` |
 | `trusted_endpoints` | `list`, `create`, `retrieve`, `delete`, `verify` (account level) |
 | `workspace_admin` | `list_account`, `create`, `retrieve`, `update`, `archive`, `list_members`, `add_member`, `remove_member`, `list_profiles` |
 | `api_keys` | `list`, `create`, `retrieve`, `update`, `delete`, `enable`, `disable`, `rotate`, `reveal`, `add_workspace`, `remove_workspace` (account keys) |
@@ -123,7 +123,7 @@ Responses are typed objects with snake_case readers and `to_h`: `agent.metadata.
 List methods return a `Cadenya::Page`, which is Enumerable: `items`, `next_cursor`, `next_page?`, `next_page`, and `each`/`map`/`find` walk every page (`auto_paging_each` is an alias).
 
 ```ruby
-client.agents.list(labels: "env=prod", limit: 50).each { |agent| ... }
+client.agents.list(labels: "env=prod", limit: 50).each { |agent| puts agent.metadata.name }
 client.agents.update(agent_id, metadata: { name: "Support Triager v2" }, update_mask: "metadata.name")
 ```
 
@@ -143,11 +143,11 @@ begin
 rescue Cadenya::APIError => e
   reason = e.details.to_a.find { |d| d["reason"] }&.dig("reason")   # ErrorInfo, e.g. SCOPE_MISSING
   case e.status_code
-  when 400 then e.details.to_a.flat_map { |d| d["fieldViolations"].to_a }   # message is "validation failed"
-  when 403 then ... # the key lacks the scope named by reason
-  when 404 then ... # wrong workspace, or the external ID was never set
-  when 409 then ... # "resource with the same identifier already exists": retrieve it by external ID
-  when 429 then ... # ENTITLEMENT_LIMIT_REACHED is a plan cap, not a rate limit
+  when 400 then warn e.details.to_a.flat_map { |d| d["fieldViolations"].to_a }.inspect   # message is "validation failed"
+  when 403 then warn "key lacks a scope: #{reason}"
+  when 404 then warn "wrong workspace, or the external ID was never set"
+  when 409 then warn "resource with the same identifier already exists: retrieve it by external ID"
+  when 429 then warn "#{reason}: ENTITLEMENT_LIMIT_REACHED is a plan cap, not a rate limit"
   else raise
   end
 end
@@ -209,7 +209,13 @@ stream.each do |item|
   end
 end
 cursor = stream.last_event_id
-cursor = follow.(cursor) unless settled   # the stream ended early: connection cut
+unless settled
+  if cursor.nil?   # external_id attached to an objective started earlier: no history was replayed
+    cursor = client.objectives.list_events(objective_id, sort_order: "desc", limit: 1).items.first&.metadata&.id
+    settled = SETTLED.include?(client.objectives.retrieve(objective_id).state)   # already settled: following would wait forever
+  end
+  cursor = follow.(cursor) unless settled   # otherwise the connection was cut: replay from the cursor
+end
 
 client.objectives.continue(objective_id, message: "Which one is most urgent?")
 cursor = follow.(cursor)                  # the next turn
@@ -218,12 +224,13 @@ cursor = follow.(cursor)                  # the next turn
 Rules for `stream_events`, the attach-only stream:
 
 - It never ends on its own. Call `stream.close` once `handle` returns true; `each` then returns cleanly.
-- Without `last_event_id:` it delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live. To attach to an objective you did not start, replay `list_events(objective_id, sort_order: "asc")` through `handle` and stream from the last item's `metadata.id`.
+- Without `last_event_id:` it delivers only events created after the connection opens. With it, the server replays everything after that ID, then goes live. To attach to an objective you did not start, replay `list_events(objective_id, sort_order: "asc")` through `handle`, then check `retrieve(objective_id).state`: a settled objective sends no further `stateChanged`, so stream from the last item's `metadata.id` only while it is still working.
 - Resume only from `stream.last_event_id`, never from `event.metadata.id` of a streamed event. Heartbeats (`hb_…`) and deltas (`dlt_…`, with `include_deltas: true`) carry IDs the server rejects as a cursor (400 `Last-Event-ID must be a persisted objevt_ event ID`); only `objevt_…` IDs advance `stream.last_event_id`.
 
 Both streams:
 
-- Connections are cut after about 10 minutes. That ends `each` cleanly, with no reconnect, so loop until settled as `follow` does.
+- Connections are cut after about 10 minutes. A cut can end `each` cleanly with no reconnect, so loop until settled as `follow` does.
+- Rescue your own errors inside the block. Anything raised there other than `Cadenya::APIError`, including an `APIConnectionError` from `approve_tool_call`, counts as a dropped connection: the stream reconnects after that event, the event is lost, and the error never reaches you. A lost approval leaves the objective stuck; `list_tool_calls(objective_id, status: "TOOL_CALL_STATUS_WAITING_FOR_APPROVAL")` finds it.
 - Mid-stream transport drops reconnect from `stream.last_event_id`, up to 5 attempts per outage. `request_options: { reconnect: false }` raises `APIConnectionError` instead, so you can resume yourself.
 - A stream is single-use: iterating it twice raises `IOError` (`stream already consumed`). Open a new one from `stream.last_event_id`.
 - A replayed `toolApprovalRequested` for a call you already approved makes `approve_tool_call` fail with 400 (code 9, not waiting for approval). Treat that as already handled.
@@ -266,7 +273,7 @@ The gem has no logger. Pass `connection:` with Faraday's logger middleware (plus
 | 400 field `spec.model_config.model_id` | wrong `model_id` form, disabled model, or no workspace default | a `model_…` ID from `models.list` |
 | 429 `the account has reached its plan's limit of N for agent_variations` | the plan caps non-archived variations across the whole account; `default_variation` counts | archive unused variations, or update an existing one |
 | 400 `metadata.externalId is required …` from `create_and_stream` | no `metadata: { external_id: }` | add a stable external ID |
-| `stream_events` yields nothing for a finished objective | no `last_event_id:` | replay `list_events(sort_order: "asc")`, then stream from the last ID |
+| `stream_events` yields nothing and never returns for a finished objective | a settled objective sends no new events | check `retrieve(id).state`; read a settled objective with `list_events(sort_order: "asc")` instead of streaming |
 | `stream_events` `each` never returns | that stream never closes | `stream.close` on the settled `stateChanged` |
 | `ArgumentError: streaming with a caller-supplied connection: requires an explicit stream_transport:` | custom `connection:` without a stream transport | pass `stream_transport:`, or drop `connection:` |
 | `ArgumentError: unknown request_options key(s): …` | typo in `request_options:` | only `headers`, `timeout`, `max_retries`, `reconnect` |

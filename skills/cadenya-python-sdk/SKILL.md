@@ -144,7 +144,7 @@ client.agents.update(agent_id, metadata={"name": "Support Triager v2"}, update_m
 | Class | When | Attributes |
 | --- | --- | --- |
 | `APIError` | non-2xx after retries | `status_code`, `code` (google.rpc), `message`, `details` (raw JSON dicts) |
-| `APIConnectionError` | transport failure, or a stream drop with reconnect off | |
+| `APIConnectionError` | transport failure or timeout, or a stream drop with reconnect off or after 5 failed reconnects | |
 | `APIResponseError` | 2xx with empty, `null`, or malformed JSON; unfollowed redirect | `status_code`, `body` |
 
 ```python
@@ -157,7 +157,7 @@ except APIError as e:
     else: raise
 ```
 
-Stream-endpoint errors carry only `message` (no `code` or `details`), and a failed precondition there is 409 rather than 400. Timeouts surface as `httpx` exceptions.
+Stream-endpoint errors carry only `message` (no `code` or `details`), and a failed precondition there is 409 rather than 400. Timeouts surface as `APIConnectionError`, with the `httpx` exception as `__cause__`.
 
 ## Retries and per-request options
 
@@ -165,7 +165,7 @@ Stream-endpoint errors carry only `message` (no `code` or `details`), and a fail
 
 ## Streaming objective events
 
-Default: start the objective with `create_and_stream`. It creates the objective and streams its events on one connection, and ends on its own once the objective settles (`OBJECTIVE_STATE_WAITING` or terminal). `metadata.external_id` is required: it is the idempotency key, so the SDK's mid-stream reconnect (a re-POST) attaches to the same objective instead of starting another. The first item has `type == "objective"` (`.objective`); every later item has `type == "event"` (`.event`, an `ObjectiveEvent`).
+Default: start the objective with `create_and_stream`. It creates the objective and streams its events on one connection, and ends on its own once the objective settles (`OBJECTIVE_STATE_WAITING` or terminal). `metadata.external_id` is required: it is the idempotency key, so the SDK's mid-stream reconnect (a re-POST) attaches to the same objective instead of starting another. Any request whose `external_id` already names an objective attaches to it (a re-run of the same script continues the old objective), so use one key per unit of work, such as the ticket ID. The first item has `type == "objective"` (`.objective`); every later item has `type == "event"` (`.event`, an `ObjectiveEvent`).
 
 The end-of-turn signal is a `stateChanged` event whose `to_state` is `OBJECTIVE_STATE_WAITING` (the Agent answered and waits for `continue_`); a terminal `to_state` ends the objective.
 
@@ -206,11 +206,14 @@ with client.objectives.create_and_stream(
     first_user_message="Summarize the open tickets.",
 ) as stream:
     for item in stream:
-        if item.type == "objective":
+        if item.type == "objective":                 # re-sent first after every reconnect
             objective_id = item.objective.metadata.id
+            settled = item.objective.state in SETTLED  # external_id reused from a settled run: no events follow
         elif handle(objective_id, item.event):
             settled = True
     last_event_id = stream.last_event_id
+if settled and last_event_id is None:                # attached to a settled run: checkpoint at its newest event
+    last_event_id = client.objectives.list_events(objective_id, sort_order="desc", limit=1).items[0].metadata.id
 if not settled:                                      # connection cut before the objective settled
     last_event_id = follow(objective_id, last_event_id)
 
@@ -222,7 +225,7 @@ Rules the code above depends on:
 
 - `stream_events` attaches to an existing objective and **never closes on its own**; stop on the settled `stateChanged`. Without `last_event_id` it delivers only events created after the connection opens; with it, the server replays everything after that ID, then goes live. To attach from scratch, page `list_events(objective_id, sort_order="asc")` and pass the last event's ID.
 - Resume only from `stream.last_event_id`, never from `event.metadata.id`. Live-only `heartbeat` events (and deltas, with `include_deltas=True`) carry `hb_`/`dlt_` IDs, and resuming from one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.last_event_id` starts at the ID you passed and advances only on persisted events.
-- Mid-stream transport drops reconnect from `stream.last_event_id` (5 attempts per outage). `RequestOptions(reconnect=False)` surfaces them as `APIConnectionError` so you can resume yourself. Connections are cut after about 10 minutes; that ends the `for` loop cleanly with no reconnect, which is why `follow` reopens.
+- Mid-stream transport drops reconnect from `stream.last_event_id` (5 attempts per outage). `RequestOptions(reconnect=False)` surfaces them as `APIConnectionError` so you can resume yourself. Connections are cut after about 10 minutes. A cut that reaches the client as a clean end of stream stops the `for` loop with no reconnect, which is why `follow` reopens.
 - A stream is single-use (`stream already consumed`); open a new one with `last_event_id=stream.last_event_id`.
 - A replayed `toolApprovalRequested` for a call already approved makes `approve_tool_call` fail with 400, code 9 (`… not waiting for approval`); treat it as handled.
 - `stream.events()` yields raw `ServerSentEvent(event, data, id)` envelopes; housekeeping frames (`open`, `ping`) are skipped.
@@ -239,7 +242,7 @@ event = client.unwrap_webhook(request.get_data(), request.headers)   # raw body 
 # event.data.objective_event.data.type is the event kind (same union as the stream)
 ```
 
-Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, 5-minute tolerance (`tolerance_seconds=`). The secret starts with `whsec_` and comes from `client.accounts.retrieve().info.webhook_events_hmac_secret`; store it as `CADENYA_WEBHOOK_SECRET`. `verify_webhook(secret, payload, headers)` checks without decoding. Failures raise `WebhookVerificationError`. Pass the raw body, never a re-serialized one.
+Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, 5-minute tolerance (adjustable only through `verify_webhook(..., tolerance_seconds=)`). The secret starts with `whsec_` and comes from `client.accounts.retrieve().info.webhook_events_hmac_secret`; store it as `CADENYA_WEBHOOK_SECRET`. `verify_webhook(secret, payload, headers)` checks without decoding. Failures raise `WebhookVerificationError`. Pass the raw body, never a re-serialized one.
 
 ## Logging
 
@@ -254,7 +257,7 @@ No built-in logger: `logging.getLogger("httpx").setLevel(logging.DEBUG)`, or pas
 | 400 `validation failed` on `spec.model_config.model_id` | wrong or disabled model | `metadata.id` from `models.list(state="STATE_ENABLED")` |
 | 400 `metadata.externalId is required: …` | `create_and_stream` without `metadata.external_id` | pass `metadata={"external_id": ...}` |
 | 409 `resource with the same identifier already exists` | `create` with an external ID already in use | retrieve `external_id:<id>`, or use a new one |
-| 429 `the account has reached its plan's limit of N for agent_variations` | account-wide cap on non-archived variations (`ENTITLEMENT_LIMIT_REACHED`; the default variation counts) | delete unused variations, or upgrade the plan |
+| 429 `the account has reached its plan's limit of N for agent_variations` | account-wide cap on non-archived variations (`ENTITLEMENT_LIMIT_REACHED`; the default variation counts) | delete unused variations, or upgrade the plan (an unclaimed temporary account gets `REQUIRES_CLAIM` instead) |
 | `stream_events` loop never ends | that stream stays open | return on the settled `stateChanged` |
 | `stream_events` yields nothing for a finished objective | no `last_event_id` | replay with `list_events(sort_order="asc")`, then stream from the last ID |
 | `stream already consumed` | iterated a stream twice | new stream with `last_event_id=stream.last_event_id` |

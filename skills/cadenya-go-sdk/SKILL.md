@@ -49,7 +49,7 @@ client.Objectives().ApproveToolCall(ctx, objectiveID, toolCallID, nil)
 client.Objectives().Continue(ctx, objectiveID, &cadenya.ObjectiveContinueParams{Message: "…"})
 ```
 
-Params structs are `<Singular><Op>Params` (`AgentCreateParams`, `ObjectiveListParams`), each with a fluent `<Singular><Op>Builder` ending in `.ToParams()`. Every one has `WorkspaceID *string` to override the client default for one call.
+Params structs are `<Singular><Op>Params` (`AgentCreateParams`, `ObjectiveListParams`), each with a fluent `<Singular><Op>Builder` ending in `.ToParams()`. Every workspace-scoped one has `WorkspaceID *string` to override the client default for one call.
 
 ## Request bodies
 
@@ -146,6 +146,8 @@ if errors.As(err, &apiErr) {
 }
 ```
 
+Errors from `CreateAndStream` and `StreamEvents` (returned by the call, or by `Err()` after a reconnect) carry only `Message`: `Code` is 0 and `Details` is empty, and 409 there means a failed precondition such as `Last-Event-ID does not name an event of this objective`.
+
 Request options: `WithRequestHeader(k, v)`, `WithRequestRetries(n)`, `WithReconnect(bool)`, `WithLastEventID(id)`. Retries apply only to GET, HEAD, PUT and DELETE, on 408, 409, 429, 500, 502, 503, 504 and transport errors, and honor `Retry-After`. `WithRequestRetries` opts a single POST or PATCH in.
 
 ## Streaming objective events
@@ -173,12 +175,12 @@ for stream.Next() {
     case item.Objective != nil:
         objectiveID = item.Objective.Objective.Metadata.ID
     case item.Event != nil:
-        if handle(objectiveID, *item.Event.Event) { settled = true }
+        if handle(ctx, objectiveID, *item.Event.Event) { settled = true }
     }
 }
 if err := stream.Err(); err != nil { return err }
 last := stream.LastEventID()
-if !settled { // the connection was cut before the objective settled
+if !settled { // cut before the objective settled, or attached to an objective that had already settled
     if last, err = watch(ctx, objectiveID, last); err != nil { return err }
 }
 
@@ -194,19 +196,32 @@ last, err = watch(ctx, objectiveID, last)
 - It never closes on its own. Stop on a settling `StateChanged`; `Close()` makes `Next()` return false with a nil `Err()`.
 - Resume only from a durable `objevt_` ID. Heartbeat (`hb_`) and, with `IncludeDeltas`, delta (`dlt_`) events reach `Current()` but carry no SSE ID, and sending one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.LastEventID()` only ever holds a durable ID, so checkpoint with it, not `ev.Metadata.ID`.
 - Mid-stream transport drops reconnect from `LastEventID()` (5 attempts per outage). `WithReconnect(false)` returns them as errors instead.
-- Connections are cut after about 10 minutes. That is a clean end of stream: `Next()` returns false with a nil `Err()` and no reconnect, so reopen from `LastEventID()` in an outer loop.
-- To attach with no checkpoint, read history with `ListEvents` (`SortOrder: cadenya.String("asc")`, then `page.All(ctx)`), handle each event, and pass the last one's `Metadata.ID` (history holds only durable events).
+- Connections are cut after about 10 minutes. If that arrives as a clean end of stream, `Next()` returns false with a nil `Err()` and the SDK does not reconnect, so reopen from `LastEventID()` in an outer loop.
+- With no checkpoint, read history first with `ListEvents` (`SortOrder: cadenya.String("asc")`, then `page.All(ctx)`), as `watch` does. Streaming from `""` on an objective that has already settled waits forever, because no new event arrives.
 - A replayed `ToolApprovalRequested` for a call already approved makes `ApproveToolCall` fail with 400 (code 9, `not waiting for approval`); treat that as handled.
 
 ```go
 // watch follows an existing objective until it settles and returns the new checkpoint.
 func watch(ctx context.Context, objectiveID, last string) (string, error) {
+    if last == "" { // no checkpoint: replay history (durable events only), then stream after it
+        page, err := client.Objectives().ListEvents(ctx, objectiveID, &cadenya.ObjectiveListEventsParams{SortOrder: cadenya.String("asc")})
+        if err != nil { return last, err }
+        history, err := page.All(ctx)
+        if err != nil { return last, err }
+        settled := false
+        for _, ev := range history {
+            s := handle(ctx, objectiveID, ev)
+            if ev.Data != nil && ev.Data.StateChanged != nil { settled = s } // the latest state change decides
+            last = ev.Metadata.ID
+        }
+        if settled { return last, nil }
+    }
     for {
         s, err := client.Objectives().StreamEvents(ctx, objectiveID, nil, cadenya.WithLastEventID(last))
         if err != nil { return last, err }
         settled := false
         for s.Next() {
-            if handle(objectiveID, s.Current()) { settled = true; break }
+            if handle(ctx, objectiveID, s.Current()) { settled = true; break }
         }
         last = s.LastEventID()
         s.Close()
@@ -215,7 +230,7 @@ func watch(ctx context.Context, objectiveID, last string) (string, error) {
 }
 
 // handle reports whether the objective settled. The payload sits one level down under the variant's name.
-func handle(objectiveID string, ev cadenya.ObjectiveEvent) (settled bool) {
+func handle(ctx context.Context, objectiveID string, ev cadenya.ObjectiveEvent) (settled bool) {
     d := ev.Data
     if d == nil { return false }
     switch {
@@ -267,7 +282,7 @@ Deliveries follow Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, 
 | --- | --- | --- |
 | `cadenya: missing "workspaceId": pass it in params, set it on the client, or set the CADENYA_WORKSPACE_ID environment variable` | no client default and `params.WorkspaceID` is nil | `WithWorkspaceID`, `CADENYA_WORKSPACE_ID`, or set it on the params |
 | 400 `validation failed`, violation on `agent_id`: `agent must be published to create an objective` | the Agent is a draft | `Agents().Publish` |
-| 400 violation on `metadata.externalId` from `CreateAndStream` | no external ID | set `Metadata.ExternalID` |
+| 400 `metadata.externalId is required: …` from `CreateAndStream` | no external ID | set `Metadata.ExternalID` |
 | 400 violation on `spec.model_config.model_id` | wrong form, or the model is disabled | `model_…` from `Models().List`, or `<provider-key-external-id>.<model-external-id>` |
 | 429 `the account has reached its plan's limit of N for agent_variations` (`ENTITLEMENT_LIMIT_REACHED`) | the plan caps non-archived variations across the account, and a default variation counts | update an existing variation, or archive one |
 | `StreamEvents` yields nothing for a finished objective | no `WithLastEventID` | replay with `ListEvents`, then stream from the last ID |
