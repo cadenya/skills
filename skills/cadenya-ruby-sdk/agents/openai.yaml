@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya Ruby SDK"
+  short_description: "Use the cadenya gem from Ruby"
+  default_prompt: "Use $cadenya-ruby-sdk to build or troubleshoot a Cadenya integration with the Ruby SDK."

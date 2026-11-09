@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya Go SDK"
+  short_description: "Use go.cadenya.com/cadenya-go from Go"
+  default_prompt: "Use $cadenya-go-sdk to build or troubleshoot a Cadenya integration with the Go SDK."

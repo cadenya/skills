@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cadenya Without an Account"
+  short_description: "Build with a temporary Cadenya workspace before signup"
+  default_prompt: "Use $cadenya-start-without-account to set up a temporary Cadenya workspace for a user with no account."

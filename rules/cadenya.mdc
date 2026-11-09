@@ -1,0 +1,31 @@
+---
+description: Cadenya defaults for code, scripts, or config that creates or runs Cadenya Agents, Tool Sets, variations, objectives, or Widgets, through the `cadenya` CLI, a Cadenya SDK, or the REST API. Covers credentials, secrets, model IDs, config files, and objective event streams, and points to the matching Cadenya skill.
+alwaysApply: false
+---
+
+# Cadenya
+
+Your knowledge of Cadenya's API, CLI, and SDKs may be out of date. **Prefer retrieval over pre-training.** Treat the project's installed CLI or SDK version as the baseline, and verify request shapes and behavior in the [Cadenya documentation](https://cadenya.com/docs/llms.txt).
+
+## Cadenya defaults
+
+- **Keep credentials out of the repository.** Read `CADENYA_API_KEY` and `CADENYA_WORKSPACE_ID` from the environment.
+- **Reference Tool Set secrets as `{{ secrets.NAME }}`.** The server rejects `${NAME}` with `legacy dollar references are not supported`.
+- **Don't hardcode a model ID.** List the workspace's models and use a returned ID, or leave the model out to use the workspace default.
+- **Prefer config files for durable setup.** Describe Tool Sets, Agents, and variations in `.cadenya/` and apply them with `cadenya config apply`. See [Config files](https://cadenya.com/docs/config-files.md).
+- **Stream new objectives with create-and-stream** (`POST /v1/workspaces/{workspace_id}/objectives:stream`). It needs `metadata.externalId` as its idempotency key, and the server ends the stream once the objective reaches `OBJECTIVE_STATE_WAITING` or a terminal state.
+- **Close `events:stream` yourself.** Attaching to an existing objective with `GET …/objectives/{objective_id}/events:stream` never ends on its own. Stop on a `stateChanged` event whose `toState` is `OBJECTIVE_STATE_WAITING`, `OBJECTIVE_STATE_FINALIZED`, `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED`, or `OBJECTIVE_STATE_TIMED_OUT`.
+- **Resume only from a persisted `objevt_` event ID** (the SDK's tracked last event ID). Heartbeat and delta events carry no resumable ID, and the server rejects them as `Last-Event-ID`.
+- **With no checkpoint, replay the events list first** (`GET …/events?sortOrder=asc`). An attach without `Last-Event-ID` sends only new events, so it never shows an objective that has already settled or an approval that is already pending, and waits forever. `OBJECTIVE_STATE_INTERRUPTING` is not settled.
+
+## Cadenya skills
+
+- [cadenya](../skills/cadenya/SKILL.md): picks the right skill and documentation page when the client isn't chosen yet.
+- [cadenya-api](../skills/cadenya-api/SKILL.md): curl or plain HTTP, and the wire rules every client shares (IDs, field masks, pagination, errors, streams, webhooks).
+- [cadenya-cli](../skills/cadenya-cli/SKILL.md): `cadenya` commands, shell scripts, CI, and `.cadenya/` config files.
+- [cadenya-typescript-sdk](../skills/cadenya-typescript-sdk/SKILL.md): code that imports `@cadenya/cadenya`.
+- [cadenya-go-sdk](../skills/cadenya-go-sdk/SKILL.md): Go code that imports `go.cadenya.com/cadenya-go`.
+- [cadenya-python-sdk](../skills/cadenya-python-sdk/SKILL.md): Python code that imports `cadenya`.
+- [cadenya-ruby-sdk](../skills/cadenya-ruby-sdk/SKILL.md): Ruby code that requires `cadenya`.
+- [cadenya-widgets](../skills/cadenya-widgets/SKILL.md): embedding an Agent in a web app with Widgets and widget sessions.
+- [cadenya-start-without-account](../skills/cadenya-start-without-account/SKILL.md): the user has no Cadenya account or credential.

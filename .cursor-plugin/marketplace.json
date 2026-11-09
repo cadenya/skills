@@ -1,0 +1,13 @@
+{
+  "name": "cadenya",
+  "owner": {
+    "name": "Cadenya"
+  },
+  "plugins": [
+    {
+      "name": "cadenya",
+      "source": "./",
+      "description": "Build, run, and manage AI agents on Cadenya, the hosted agent runtime, with Cadenya Skills and the Cadenya MCP server."
+    }
+  ]
+}
