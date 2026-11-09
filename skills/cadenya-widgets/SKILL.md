@@ -27,6 +27,7 @@ For raw HTTP routes and the error envelope, see cadenya-api. For client setup, p
 - `spec.originAllowlist` holds up to 32 exact origins that match `^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$`. Paths, trailing slashes and wildcards are not allowed. The edge compares the browser's `Origin` header to each entry as a string, so write entries in lowercase and leave out default ports (`https://app.example.com`, not `https://App.example.com:443`). Each Vercel preview URL is a separate origin.
 - A new hostname can take up to a minute to start serving. Until it does, the host answers `404 {"error":"unknown widget"}`.
 - Changing a Widget's Agent or variation affects new sessions only. A session copies the Agent binding when it is minted.
+- Widgets count toward the account's plan limit. An archived Widget does not count.
 
 ```ts
 import Cadenya from "@cadenya/cadenya"; // reads CADENYA_API_KEY and CADENYA_WORKSPACE_ID
@@ -42,16 +43,26 @@ const widget = await client.widgets.create({
 // widget.info.host is the hostname. Never build it from the ID or DNS label.
 ```
 
-The CLI equivalent is `cadenya widgets create --name … --agent-id … --origin-allowlist … --dry-run` (see cadenya-cli). To narrow the origins later, use `widgets.update` with a field mask (see cadenya-api).
+The CLI equivalent is `cadenya widgets create --name … --agent-id … --origin-allowlist … --dry-run` (see cadenya-cli; repeat `--origin-allowlist` for each origin).
+
+To change the origins, send the **whole** list. The update replaces it:
+
+```ts
+const current = await client.widgets.retrieve("external_id:support-chat");
+await client.widgets.update("external_id:support-chat", {
+  spec: { agentId: current.spec.agentId, originAllowlist: [...(current.spec.originAllowlist ?? []), "https://staging.example.com"] },
+  updateMask: "spec.originAllowlist",
+});
+```
 
 ## 2. Mint a Widget Session (server only)
 
-- **Scopes.** Creating a session takes `widget_sessions:manage`. The session also inherits the minting key's scopes, frozen at mint. Visitors cannot start or continue conversations unless the key holds `objectives:manage`. Without it, the browser gets `403 Session cannot create or continue conversations`, or `Widget session cannot read conversations` without `objectives:read`.
+- **Scopes.** Creating a session takes `widget_sessions:manage`. The session also inherits the minting key's scopes, frozen at mint. Visitors cannot start or continue conversations unless the key holds `objectives:manage`. Without it, the browser gets `403 Session cannot create or continue conversations`, or `Widget session cannot read conversations` without `objectives:read`. Mint with an API key: a session minted with a user login gets no scopes and cannot converse.
 - **Tenant and subject are required.** Use `spec.tenant.id` for your organization ID and `spec.subject.id` for your user ID: 1 to 64 characters of `[A-Za-z0-9._-]`, plus an optional `name` of up to 64 characters. The mint creates or updates the tenant and subject records. Take both IDs from your own authenticated session, never from the request body.
 - **Lifetime.** The token lasts 15 minutes (`credentials.tokenExpiresAt`). The session lasts 24 hours unless `spec.expiresAt` (an RFC 3339 string, which must be in the future) sets a different deadline. Nothing extends that deadline. A session also ends after 200 visitor messages (`STATE_EXHAUSTED`).
 - **Every call mints a new session**, with no dedupe. One subject can hold at most 10 live sessions per Widget, and minting an eleventh revokes the oldest.
 - **Optional trusted context**, all fixed at mint:
-  - `secrets: [{ name, value }]`: encrypted, never returned, and used ahead of workspace and Tool Set secrets with the same name.
+  - `secrets: [{ name, value }]` (top level, beside `spec`): encrypted, never returned, and used ahead of workspace and Tool Set secrets with the same name. Tool Set headers reference them as `{{ secrets.NAME }}`.
   - `spec.pinnedParameters`: up to 32 tool arguments that the model cannot see or override.
   - `metadata.labels`.
 
@@ -71,7 +82,6 @@ export async function POST() {
   });
   const c = session.credentials; // returned only by create
   if (!c) return new Response("Widget Session returned no credentials", { status: 502 });
-  await rememberWidgetSession(user, c.sessionId); // server-side, for revoke on logout
   return Response.json(
     { host: c.host, token: c.token, tokenExpiresAt: c.tokenExpiresAt, sessionExpiresAt: c.sessionExpiresAt },
     { headers: { "Cache-Control": "no-store" } },
@@ -104,7 +114,7 @@ const mint = async (): Promise<Creds> => {
 
 export function SupportChat() {
   const [creds, setCreds] = useState<Creds | null>(null);
-  useEffect(() => { mint().then(setCreds); }, []);
+  useEffect(() => { mint().then(setCreds, console.error); }, []);
   const getToken = useCallback(async () => (await mint()).token, []);
   if (!creds) return null;
   return (
@@ -120,9 +130,9 @@ export function SupportChat() {
 - The provider calls `https://{host}`. When a request returns 401, it calls `getToken` once and retries. Open streams survive the token change.
 - Each `getToken` call mints a **new** session for the same tenant and subject. Conversation history carries over, because history belongs to the identity, not to the session. Your route decides each time whether this visitor still gets access.
 - The panel fills its container, so give the container a definite height.
-- Page tools, client tools and the Widgets Tools template (`<WidgetTools>` from `@cadenya/widgets-ui-react/widget-tools`, under one `PageToolsProvider`) are covered in the [Widget quickstart](https://cadenya.com/docs/guides/getting-started/widget-quickstart.md).
-- For a custom UI, use `@cadenya/widgets`: ``new CadenyaWidgets({ apiKey: token, baseURL: `https://${host}` })``.
-- To renew a token without going back to your backend, call `client.session.renewWidget({ workspaceId })` on the Widget host before `tokenExpiresAt`. It accepts a token at most 60 seconds past expiry, allows 30 renewals per minute, and keeps the same session and deadline. The React kit does not call it.
+- The Widgets Tools template (`<WidgetTools>` from `@cadenya/widgets-ui-react/widget-tools`) and page tools must share one `PageToolsProvider` with the panel. See the [Widget quickstart](https://cadenya.com/docs/guides/getting-started/widget-quickstart.md). Client tools are in [Widgets: page tools and client tools](https://cadenya.com/docs/guides/the-basics/widgets.md).
+- For a custom UI, use `@cadenya/widgets` (a dependency of the kit): ``new CadenyaWidgets({ apiKey: token, baseURL: `https://${host}` })``.
+- To renew a token without going back to your backend, call `widgets.session.renewWidget({ workspaceId })` on that `CadenyaWidgets` client before `tokenExpiresAt`. `workspaceId` is the session's `metadata.workspaceId`, so return it from your mint route. Renewal accepts a token at most 60 seconds past expiry, allows 30 renewals per minute, and keeps the same session and deadline. The React kit does not call it.
 
 ## 4. Tenant and subject isolation
 
@@ -135,9 +145,9 @@ export function SupportChat() {
 
 | Goal | Call | Effect |
 | --- | --- | --- |
-| End one session now (logout, incident) | `widgetSessions.revoke(id)` | `STATE_REVOKED`. Its tokens fail with 401 and its secrets are deleted. Repeat calls succeed. |
-| End all of a user's sessions | `list({ widgetId, tenantId: "external_id:<org>", subjectId: "external_id:<user>", state: "STATE_ACTIVE" })`, then `revoke` each | `subjectId` in the external-ID form needs `tenantId` |
-| Remove a session record | `widgetSessions.delete(id)` | Its conversations are kept but no longer linked to the session |
+| End all of a user's sessions (logout) | `list({ widgetId, tenantId: "external_id:<org>", subjectId: "external_id:<user>", state: "STATE_ACTIVE" })`, then `revoke` each | `subjectId` in the external-ID form needs `tenantId`. Every re-mint is a new session, so revoke them all. |
+| End one session now (incident) | `widgetSessions.revoke(id)` | `STATE_REVOKED`. Its tokens fail with 401 and its secrets are deleted. Repeat calls succeed. |
+| Remove a session record | `widgetSessions.delete(id)` | Its conversations are kept but no longer linked to any session, so a later `deleteTenant` does not erase them. For erasure, use `deleteTenant` first. |
 | Erasure request for a tenant | `widgetSessions.deleteTenant({ tenantId: "external_id:<org>" })` | Deletes the tenant's sessions **and their conversations** on every Widget. Each call deletes at most 10,000 sessions, so repeat until `sessionsDeleted` is 0. |
 | Turn off a Widget | `widgets.archive(id)` | The host returns 404 and its sessions are revoked. `unarchive` does not restore them, so mint new sessions. |
 
@@ -153,8 +163,9 @@ for await (const s of await client.widgetSessions.list({
 ## 6. Origins, CSP and transport
 
 - The page's origin must be on the allowlist. A non-GET request without an `Origin` header is refused, and the host accepts HTTPS only.
-- With a Content Security Policy, allow the Widget host in `connect-src`: `connect-src 'self' https://k7m2xq9fp4wn.widgets.cadenya.com` (or `https://*.widgets.cadenya.com`). The kit uses `fetch` for requests and streams, and it uses no iframe. If you use the Widgets Tools display card, allow its image hosts in `img-src`.
-- CORS allows the `GET`, `POST` and `OPTIONS` methods and the `Authorization`, `Content-Type` and `Last-Event-ID` headers.
+- With a Content Security Policy, add `https://<info.host>` to `connect-src`. The kit and `@cadenya/widgets` send every request and event stream with `fetch` to that host, and use no iframe, `EventSource` or WebSocket.
+- Assistant messages render markdown images, and the Widgets Tools details card renders `image.url`. Both URLs come from the model, so a strict `img-src` blocks them. Decide which image hosts to allow.
+- CORS allows the `GET`, `POST` and `OPTIONS` methods and the `Authorization`, `Content-Type` and `Last-Event-ID` headers. Widgets use bearer tokens, never cookies.
 
 ## Troubleshooting
 
@@ -166,18 +177,19 @@ for await (const s of await client.widgetSessions.list({
 | `404 {"error":"unknown widget"}` | Wrong host, Widget archived or deleted, or a new Widget that is still propagating (up to a minute). |
 | `400 validation failed`, `spec.widgetId`: `widget does not exist in this workspace` / `archived widgets cannot mint sessions; unarchive the widget first` | Wrong workspace or ID, or the Widget is archived. |
 | `400 validation failed` on `spec.tenant` or `spec.subject` | One of them is missing or does not match `[A-Za-z0-9._-]{1,64}`. |
-| `Session expiry must be in the future` | `spec.expiresAt` is in the past. |
-| `agent must be published to create an objective` | The Widget's Agent is a draft. Publish it. |
+| `400 Session expiry must be in the future` | `spec.expiresAt` is in the past. |
+| `429 the account has reached its plan's limit of N for widgets` (`ENTITLEMENT_LIMIT_REACHED`) | Archive or delete an unused Widget, or raise the plan. |
+| `400 validation failed`, `agent_id`: `agent must be published to create an objective` | The Widget's Agent is a draft. Publish it. |
 | `403 Session cannot create or continue conversations` / `Widget session cannot read conversations` | The minting key lacks `objectives:manage` / `objectives:read`. Add the scope and mint a new session; the old session keeps its frozen scopes. |
 | `401 Widget access token expired` (`TOKEN_EXPIRED`) | The token is past its expiry. Provide `getToken`, or renew before `tokenExpiresAt`. |
 | `401` right after a revoke or an eviction (more than 10 live sessions) | Revocation rotates the session's signing key, so its tokens fail the signature check. The kit then calls `getToken`; mint again only if the visitor is still allowed. |
 | `403 Widget session expired` (`SESSION_EXPIRED`) | The session's deadline passed. Mint a new session. |
-| `403` with `SESSION_REVOKED` (`Widget session revoked`, `Widget session authorization revoked`) | The session, or the API key that minted it, no longer authorizes access. Mint with a valid key. |
-| `429 Widget session has spent its message allowance` (`SESSION_EXHAUSTED`) | The session reached 200 messages. Minting a new session is an explicit app decision. |
+| `403` with `SESSION_REVOKED` (`Widget session revoked`, `Widget session authorization revoked`) | The session was revoked, or its Widget, workspace or minting API key no longer authorizes it (archived, deleted, disabled, or removed from the workspace). Mint with a valid key on an active Widget. |
+| `429 Widget session has spent its message allowance` or `Widget session exhausted` (`SESSION_EXHAUSTED`) | The session reached 200 messages. Minting a new session is an explicit app decision. |
 | `Widget session requires tenant and subject identity; create a new session` | A legacy session without identity. Mint a new one. |
 | `429 Widget session renewal rate limit exceeded` (`RATE_LIMITED`) | More than 30 renewals per minute. Honor `Retry-After`. |
-| `This assistant is temporarily unavailable. Please try again later.` | The account's plan refused the request. Check the plan and usage. |
-| Server-side `403` with reason `SCOPE_MISSING` | The key lacks `widgets:manage` or `widget_sessions:manage`. |
+| `503 This assistant is temporarily unavailable. Please try again later.` | The account's plan refused the visitor's request. Check the plan and usage. |
+| Server-side `403` with reason `SCOPE_MISSING` | The key lacks the scope for that call: `widgets:read`/`:manage` or `widget_sessions:read`/`:manage`. |
 
 Match the `google.rpc.ErrorInfo` reason (domain `api.cadenya.com`), not the message text. The edge's `{"error": …}` bodies have no reason.
 

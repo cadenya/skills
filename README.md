@@ -61,28 +61,29 @@ Clone this repo and copy the skill folders into the appropriate directory for yo
 
 ## Skills
 
-Skills are contextual and auto-loaded based on your conversation. When a request matches a skill's triggers, the agent loads and applies the relevant skill.
+Agents load a skill when a request matches its description, so you don't need to name it.
 
 | Skill | Useful for |
 | --- | --- |
-| [cadenya](skills/cadenya/SKILL.md) | Starting point. Picks the right skill and documentation page for a Cadenya task. |
-| [cadenya-api](skills/cadenya-api/SKILL.md) | Wire conventions shared by every client: IDs and external IDs, field masks, pagination, errors, event streams, webhooks, and per-resource request shapes. |
-| [cadenya-cli](skills/cadenya-cli/SKILL.md) | The `cadenya` CLI: login and workspaces, request bodies from flags or YAML, Tool Sets and Agents, streaming objectives, approvals, and CI scripts. |
+| [cadenya](skills/cadenya/SKILL.md) | Starting point when the client isn't chosen yet. Picks the right skill and documentation page for a Cadenya task. |
+| [cadenya-api](skills/cadenya-api/SKILL.md) | curl or a plain HTTP client, and the wire rules every client shares: IDs and external IDs, field masks, pagination, errors, event streams, webhooks, and per-resource request shapes. |
+| [cadenya-cli](skills/cadenya-cli/SKILL.md) | The `cadenya` CLI: login and workspaces, request bodies from flags or YAML, Tool Sets and Agents, streaming objectives, approvals, `.cadenya/` config files, and CI scripts. |
 | [cadenya-typescript-sdk](skills/cadenya-typescript-sdk/SKILL.md) | The `@cadenya/cadenya` TypeScript SDK: client setup, methods, pagination, errors, objective event streams, and webhook verification. |
-| [cadenya-go-sdk](skills/cadenya-go-sdk/SKILL.md) | The Cadenya Go SDK. |
-| [cadenya-python-sdk](skills/cadenya-python-sdk/SKILL.md) | The Cadenya Python SDK. |
-| [cadenya-ruby-sdk](skills/cadenya-ruby-sdk/SKILL.md) | The Cadenya Ruby SDK. |
+| [cadenya-go-sdk](skills/cadenya-go-sdk/SKILL.md) | The `go.cadenya.com/cadenya-go` Go SDK: client options, request structs and unions, pagination, `*APIError` handling, objective event streams, and webhook verification. |
+| [cadenya-python-sdk](skills/cadenya-python-sdk/SKILL.md) | The `cadenya` Python SDK: client setup, snake_case request shapes, pagination, `APIError` handling, objective event streams, and webhook verification. |
+| [cadenya-ruby-sdk](skills/cadenya-ruby-sdk/SKILL.md) | The `cadenya` Ruby gem: client setup, request hashes, pagination, `Cadenya::APIError` handling, objective event streams, and webhook verification. |
 | [cadenya-start-without-account](skills/cadenya-start-without-account/SKILL.md) | Getting a temporary Cadenya workspace with no signup, and claiming it within 24 hours. |
+| [cadenya-widgets](skills/cadenya-widgets/SKILL.md) | Embedding an Agent in a web app: creating Widgets, minting tenant-scoped widget sessions on your server, and rendering them with the React UI kit. |
 
 ## MCP Servers
 
 | Server | URL | Transport | Authentication |
 | --- | --- | --- | --- |
-| Cadenya | `https://mcp.cadenya.com/mcp` | Streamable HTTP | OAuth with your Cadenya account, or a Cadenya API key in an `Authorization: Bearer` header |
+| Cadenya | `https://mcp.cadenya.com/mcp` | Streamable HTTP | OAuth with your Cadenya account, or an API key created in the Cadenya dashboard, sent as `Authorization: Bearer <key>` |
 
 The server supports **MCP protocol revision `2026-07-28` only**. Clients that support only older revisions cannot connect.
 
-It exposes three tools, limited by the credential's workspaces and scopes:
+It exposes three tools, limited to the credential's workspaces and scopes:
 
 - `cadenya_discover`: Find available operations and their input schemas.
 - `cadenya_read`: Run read operations.

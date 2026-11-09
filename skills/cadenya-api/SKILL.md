@@ -1,6 +1,6 @@
 ---
 name: cadenya-api
-description: Calls the Cadenya REST API directly over HTTPS (`https://api.cadenya.com/v1`) to manage workspaces, tool sets, tools, secrets, trusted endpoints, agents, variations, agent pools, schedules, objectives, tool calls, memory, models, API keys, tenants, widgets, and uploads. Covers bearer auth and scopes, ID and external-ID rules, the metadata/spec envelope, discriminated unions, field-mask updates, cursor pagination and filters, the google.rpc error shape, SSE event streams, Standard Webhooks, and the objective lifecycle. Use when building or debugging an integration with curl or a plain HTTP client, choosing endpoints and scopes, reading the OpenAPI spec, or decoding a 400/403/404/429 from Cadenya. The SDK and CLI skills build on this one; prefer them when the project already uses an SDK or the `cadenya` CLI.
+description: Cadenya REST API over raw HTTP (curl, fetch, any HTTP client) at `https://api.cadenya.com/v1`. Covers bearer auth and scopes, IDs and external IDs, request bodies for Tool Sets, Agents, variations, objectives, memory layers, Widgets and the rest, field-mask PATCH, pagination, google.rpc errors, SSE objective streams, and Standard Webhooks. Use when calling Cadenya without an SDK, choosing endpoints or API key scopes, reading the OpenAPI spec, or decoding a 400/403/404/409/429 from Cadenya. Do not use when the project already uses a Cadenya SDK or the `cadenya` CLI; use cadenya-typescript-sdk, cadenya-go-sdk, cadenya-python-sdk, cadenya-ruby-sdk, or cadenya-cli instead.
 ---
 
 # Cadenya API usage
@@ -10,7 +10,7 @@ description: Calls the Cadenya REST API directly over HTTPS (`https://api.cadeny
 - Base URL `https://api.cadenya.com`, every route under `/v1`. OpenAPI 3.1 spec: `https://openapi.cadenya.com/api-spec.yml`. Reference pages: `https://cadenya.com/docs/api-reference`.
 - JSON in and out, camelCase field names, gRPC-transcoded: every error is a `google.rpc.Status`, every list is `{ items, pagination }`, enums are `SCREAMING_SNAKE` strings with a type prefix (`STATE_PUBLISHED`, `OBJECTIVE_STATE_WAITING`).
 - Almost everything lives under `/v1/workspaces/{workspaceId}/…`. Account-level routes: `GET /v1/whoami`, `GET /v1/workspaces`, `GET /v1/account`, `POST /v1/account:rotateWebhookSigningKey`, `/v1/account/api_keys…`, `/v1/account/trusted_endpoints…`, and `/v1/account/workspaces…` (admin role only; API keys cannot call these).
-- The mental model: a **Tool Set** syncs tools from an MCP server, OpenAPI spec, or HTTP API (or is Bare and waits for your app), and may only call hosts on the account's **trusted endpoints**; an **Agent** has **Variations** (model, prompt, assigned tool sets, sub-agents, agent pools, memory layers); an **Objective** runs a variation against a message and emits **events**; you approve **tool calls**, `continue` the conversation, and submit **feedback**.
+- The mental model: a **Tool Set** syncs tools from an MCP server, OpenAPI spec, or HTTP API (or is Bare and waits for your app), and may only call hosts on the account's **trusted endpoints**; an **Agent** has **variations** (model, prompt, assigned Tool Sets, sub-agents, agent pools, memory layers); an **objective** runs a variation against a message and emits **events**; you approve **tool calls**, `continue` the conversation, and submit **feedback**.
 
 ## Account and API key
 
@@ -18,7 +18,7 @@ description: Calls the Cadenya REST API directly over HTTPS (`https://api.cadeny
 - The API keys page, https://app.cadenya.com/account/apiKeys, lists the account's keys. Sign-up creates a default key with the external ID `default` that reaches every workspace (`GET /v1/account/api_keys/external_id:default` reads it).
 - Set the key as `CADENYA_API_KEY`. `GET /v1/whoami` checks it and returns the default workspace as `defaultWorkspace.id`, the value for `CADENYA_WORKSPACE_ID`.
 - From a terminal, `cadenya auth login` signs in through the browser with a one-time code (RFC 8628 device flow). See `cadenya-cli`.
-- Keep tool sets, agents, variations, memory layers and widgets as YAML files in `.cadenya/` next to a `cadenya.yaml`, and apply them with `cadenya config apply` after `cadenya config plan` ([format](https://cadenya.com/docs/config-files), [GitHub Action](https://github.com/cadenya/cadenya-config-loader)). That keeps the setup in the repository instead of in a one-off provisioning script.
+- Keep Tool Sets, Agents, variations, memory layers and Widgets as YAML files in `.cadenya/` next to a `cadenya.yaml`, and apply them with `cadenya config apply` after `cadenya config plan` ([format](https://cadenya.com/docs/config-files), [GitHub Action](https://github.com/cadenya/cadenya-config-loader)). That keeps the setup in the repository instead of in a one-off provisioning script.
 
 ## Authentication and scopes
 
@@ -44,9 +44,9 @@ Authorization: Bearer <api key>
 - Discriminated unions carry `type` naming the populated key: `{"type": "mcp", "mcp": {…}}`, `{"type": "toolSetId", "toolSetId": "…"}`, event `data.type`. Both keys must agree.
 - Custom verbs are `POST …/{id}:verb` with a `{}` body unless noted: `agents/{id}:publish|unpublish|archive|unarchive`, `agent_pools/{id}:activate|deactivate|archive|unarchive`, `agents/{agentId}/schedules/{id}:pause|resume|archive`, `agents/{agentId}/variations/{id}:addAssignment|removeAssignment|addMemoryLayer|updateMemoryLayer|removeMemoryLayer`, `api_keys/{id}:rotate|disable|enable`, `models/{id}:enable|disable`, `models:swapModelOnVariations`, `objectives/{id}:continue|interrupt|cancel|compact`, `objectives/{id}/tool_calls/{toolCallId}:approve|deny|setContent`, `objectives/{id}/queued_actions/{id}:remove`, `tool_sets/{id}:archive|unarchive`, `tool_sets/{toolSetId}/tools/{id}:omit|restore`, `widgets/{id}:archive|unarchive`, `widget_sessions/{id}:revoke`, `account/trusted_endpoints:verify`.
 - Durations are strings in seconds (`"3600s"`), not integers, even where the spec says `integer`. `int64` fields such as `sizeBytes` are JSON strings.
-- Secrets are referenced from tool set headers and base URLs as Liquid output `{{ secrets.NAME }}` (case-insensitive name; `${NAME}` is rejected). Resolution order, later wins: workspace secret, tool set secret, objective secret. An undefined name is a 400 (`references undefined secret`). Pinned parameters interpolate as `{{ pinnedParameters.key }}`. Field descriptions in the OpenAPI spec that mention `${SECRET_NAME}` or `pinned_parameters` are stale; the server enforces the forms given here.
+- Secrets are referenced from Tool Set headers and base URLs as Liquid output `{{ secrets.NAME }}` (case-insensitive name). `${NAME}` is rejected with `legacy dollar references are not supported`, even though some OpenAPI field descriptions still show it. Resolution order, later wins: workspace secret, Tool Set secret, objective secret. Pinned parameters interpolate as `{{ pinnedParameters.key }}`, not `pinned_parameters`.
 - There is no general idempotency key and no dry-run mode. The one idempotent create is `POST …/objectives:stream`, keyed on `metadata.externalId`.
-- Requests are rate limited per account; objective create, continue and compact, create-and-stream, and tool set create and update have a much smaller budget than the rest. A 429 from the limiter carries `RetryInfo` and a `retry-after` header; wait that long and retry.
+- Requests are rate limited per account; objective create, continue and compact, create-and-stream, and Tool Set create and update have a much smaller budget than the rest. A 429 from the limiter carries `RetryInfo` and a `retry-after` header; wait that long and retry.
 
 ## Updates (PATCH with a field mask)
 
@@ -69,7 +69,7 @@ GET /v1/workspaces/development/agents?limit=50&labels=env%3Dprod%2Cteam%3Dai&sta
 - Response `{"items": [...], "pagination": {"nextCursor": "…"}}`. Fetch the next page with `cursor=<nextCursor>`; a missing or empty cursor means the last page. There is no total count. `GET /v1/workspaces` items carry `status` (`STATUS_ENABLED`) rather than `state`, and list only the workspaces the key reaches.
 - `limit` is 1 to 100, default 20.
 - `sortOrder` is `asc` or `desc` (by creation time; by sequence for events). Any other value is a 400.
-- `labels=k=v,k2=v2` requires every pair to match exactly (AND). `prefix` is a case-insensitive name prefix. `query` is a case-insensitive substring. State filters take the enum string. Agents, agent pools and tool sets hide archived ones by default; pass `state=STATE_ARCHIVED` (pools: `AGENT_POOL_STATE_ARCHIVED`) to see them.
+- `labels=k=v,k2=v2` requires every pair to match exactly (AND). `prefix` is a case-insensitive name prefix (on models it also matches the external ID or ID). `query` is a case-insensitive name substring. State filters take the enum string. Agents, agent pools and Tool Sets hide archived ones by default; pass `state=STATE_ARCHIVED` (pools: `AGENT_POOL_STATE_ARCHIVED`) to see them.
 
 ## Errors
 
@@ -83,112 +83,38 @@ Every error body is a `google.rpc.Status`:
 
 | HTTP | `code` | Meaning | Typical `details` |
 | --- | --- | --- | --- |
-| 400 | 3 `INVALID_ARGUMENT` | validation, bad mask, unknown JSON field, unresolved filter or assignment target, untrusted tool set host, objective on an unpublished agent, `continue` on a non-waiting objective without `enqueue` | `BadRequest.fieldViolations[].field` (usually the proto snake_case path) |
-| 400 | 9 `FAILED_PRECONDITION` | approve or deny a call that is not waiting, `:interrupt` on an objective that is not running, deleting an assigned agent pool, locked account, plan lacks the feature | message; `ErrorInfo.reason` `ENTITLEMENT_REQUIRED` with `metadata.feature` |
+| 400 | 3 `INVALID_ARGUMENT` | validation (`message` `validation failed`), bad mask, unknown JSON field, unresolved filter or assignment target, untrusted Tool Set host, objective on an unpublished Agent (`agent must be published to create an objective`), `continue` on a non-waiting objective without `enqueue` | `BadRequest.fieldViolations[].field` (usually the proto snake_case path) |
+| 400 | 9 `FAILED_PRECONDITION` | approve or deny a call that is not waiting, `:interrupt` on an objective that is not running, deleting an assigned agent pool, locked account, plan lacks the feature, unclaimed temporary workspace | message; `ErrorInfo.reason` `ENTITLEMENT_REQUIRED` or `REQUIRES_CLAIM` with `metadata.feature` |
 | 403 | 7 `PERMISSION_DENIED` | auth, scope, workspace access, archived workspace, admin role | `ErrorInfo.reason`: `AUTH_TOKEN_INVALID`, `API_KEY_DISABLED`, `SCOPE_MISSING`, `SCOPE_NOT_HELD`, `WORKSPACE_ACCESS_DENIED`, `WORKSPACE_NOT_HELD`, `API_KEY_NOT_OWNED`, `WORKSPACE_ARCHIVED`, `ADMIN_ROLE_REQUIRED` |
 | 404 | 5 `NOT_FOUND` | ID or external ID does not resolve in this workspace | none |
-| 409 | 6 `ALREADY_EXISTS` | duplicate external ID, assignment, or trusted host | none |
-| 429 | 8 `RESOURCE_EXHAUSTED` | rate limit, or a plan limit | rate limit: `RetryInfo` and `retry-after`; plan limit: `ErrorInfo.reason` `ENTITLEMENT_LIMIT_REACHED` with `metadata.feature`, `limit`, `usage` (upgrade, do not retry) |
+| 409 | 6 `ALREADY_EXISTS` | duplicate external ID, assignment, or trusted host (`resource with the same identifier already exists`) | none |
+| 429 | 8 `RESOURCE_EXHAUSTED` | rate limit, or an account-wide plan limit | rate limit: `RetryInfo` and `retry-after`; plan limit: `ErrorInfo.reason` `ENTITLEMENT_LIMIT_REACHED` with `metadata.feature`, `limit`, `usage` (upgrade, do not retry) |
 
-## Resources: minimal bodies
+## Workflow: first integration
 
-Placeholders: workspace `development`, provider key slug `getting-started-key`. Every body below is `POST /v1/workspaces/development/<collection>` unless noted.
+Request bodies for every resource are in [references/resources.md](references/resources.md). Copy this checklist and verify each step before the next:
 
-**Trusted endpoint** (`POST /v1/account/trusted_endpoints`): `{"metadata": {"name": "Support MCP"}, "spec": {"host": "mcp.example.com"}}`. `host` is an exact host or a one-label wildcard (`*.acme.com`), optional port, no scheme or path. Every tool set request (validation, sync, tool calls, redirects) goes only to trusted hosts, so add the host **before** creating a tool set that points at it; otherwise the create is a 400 with `<host> is not a trusted endpoint: …` on the URL field. Check a URL with `POST /v1/account/trusted_endpoints:verify` `{"url": "https://mcp.example.com/mcp"}` (`RESULT_TRUSTED`, `RESULT_UNTRUSTED`, or `RESULT_TEMPLATED` when the host comes from a template).
-
-**Workspace secret** (`workspace_secrets`, also `tool_sets/{toolSetId}/secrets`): `{"metadata": {"name": "MCP_TOKEN"}, "spec": {"value": "…"}}`. Values are never returned; updating with a non-empty value rotates it. Reference as `{{ secrets.MCP_TOKEN }}`.
-
-**Tool set** (`tool_sets`), `spec.adapter` union:
-
-```json
-{"metadata": {"name": "Support MCP", "externalId": "support-mcp"},
- "spec": {"adapter": {"type": "mcp", "mcp": {
-   "url": "https://mcp.example.com/mcp",
-   "headers": {"Authorization": "Bearer {{ secrets.MCP_TOKEN }}"},
-   "toolApprovals": {"type": "always", "always": true},
-   "includeTools": {"operator": "OPERATOR_OR", "filters": [{"attribute": "ATTRIBUTE_NAME", "matcher": {"type": "startsWith", "startsWith": "ticket_"}}]}}}}}
-```
-
-- `spec.secrets` (`[{"name": "…", "value": "…"}]`) creates tool set secrets in the same call.
-- `openapi`: `{"type": "openapi", "openapi": {"type": "url", "url": "https://api.example.com/openapi.json", "headers": {…}, "baseUrl": "https://…", "serverName": "…"}}`, or `"type": "uploadId", "uploadId": "upload_…"` after an upload. It takes the same `includeTools`, `excludeTools`, and `toolApprovals` as MCP.
-- `http`: `{"type": "http", "http": {"baseUrl": "https://api.example.com", "headers": {…}}}`, then create each tool yourself.
-- `bare`: `{"type": "bare", "bare": {"contentTimeout": "300s"}}`; calls park until you `:setContent` (default wait 24h).
-- MCP and OpenAPI sources are fetched on create, and a source that lists zero tools blocks the write; they re-sync hourly. Synced sets reject manual tool create/update/delete; curate with `includeTools`/`excludeTools`, `toolApprovals` (`{"type": "always", "always": true}` or `{"type": "only", "only": <filter>}`), and per-tool `:omit`/`:restore`. Assigned tool sets cannot be deleted; archive them. MCP `justInTime.enabled` loads tools at objective start with the objective's secrets instead of background sync.
-
-**Tool** (`tool_sets/{toolSetId}/tools`, HTTP and Bare sets only):
-
-```json
-{"metadata": {"name": "createTicket"},
- "spec": {"description": "Open a ticket", "requiresApproval": true,
-   "parameters": {"type": "object", "properties": {"subject": {"type": "string"}}, "required": ["subject"]},
-   "config": {"type": "http", "http": {"requestMethod": "POST", "path": "/tickets", "requestBodyContentType": "application/json", "requestBodyTemplate": "{\"subject\": \"{{ subject }}\"}"}}}}
-```
-
-Bare tools use `"config": {"type": "bare", "bare": {"alwaysSetResult": "Chart rendered."}}` to return fixed content instead of parking.
-
-**Agent** (`agents`) with its default variation and assignments in one call:
-
-```json
-{"metadata": {"name": "Support Triager", "externalId": "support-triager"},
- "spec": {"variationSelectionMode": "VARIATION_SELECTION_MODE_RANDOM", "webhookEventsUrl": "https://app.example.com/cadenya"},
- "defaultVariation": {"metadata": {"name": "default", "externalId": "support-triager-default"},
-   "spec": {"modelConfig": {"modelId": "getting-started-key.<model externalId>", "temperature": 0.2},
-            "systemPromptTemplate": "You triage support tickets for {{ system_prompt_data.customer_name }}.",
-            "firstUserMessageTemplate": "{{ first_user_message_data.request }}",
-            "constraints": {"maxToolCalls": 20, "inactivityTimeout": "3600s"},
-            "compactionConfig": {"triggerThreshold": 0.75},
-            "assignments": [{"type": "toolSetId", "toolSetId": "support-mcp"}],
-            "memoryLayerAssignments": [{"memoryLayerId": "runbooks", "position": 0}]}}}
-```
-
-- `modelId` is `<provider-key-externalId>.<model-externalId>` or a canonical `model_…` ID. Find the slug on `GET …/ai_provider_keys` (`metadata.externalId`, for example `getting-started-key`) and the model on `GET …/models?state=STATE_ENABLED` (or `query=`, `prefix=`, `aiProviderKeyId=`); copy the model's `metadata.externalId` rather than guessing it. Each model has `spec.provider`, `spec.family`, and `spec.capabilities`; sampling knobs are rejected when the model lacks the capability.
-- Templates are Liquid; `{% %}` tags are allowed in prompts (not in headers). `spec.systemPromptDataSchema` (JSON Schema) validates `systemPromptData` and doubles as the tool schema when the agent is a sub-agent. `spec.outputDefinition` (JSON Schema) makes objectives finalize with structured `output`.
-- Agents start `STATE_DRAFT`; `:publish` needs at least one variation, and **objectives require `STATE_PUBLISHED`**. `:unarchive` returns to draft. `variationSelectionMode` unspecified means weighted (Thompson sampling on feedback).
-- Plans cap variations per agent (429 `ENTITLEMENT_LIMIT_REACHED`). Variations live at `agents/{agentId}/variations`; the agent response does not include the variation, list it.
-
-**Assignments** live in the variation spec: `spec.assignments` (`toolSetId`, `toolId`, `subAgentId` for another agent as a tool, or `agentPoolId`) and `spec.memoryLayerAssignments` (`{memoryLayerId, position}`, ≤10, lower position consulted first). Reads always return both, and `info.assignmentMetadata` names the targets. Replace the set with a masked PATCH (`updateMask: "spec.assignments"`), or change one target with `:addAssignment` / `:removeAssignment` `{"type": "toolSetId", "toolSetId": "support-mcp"}` and `:addMemoryLayer` / `:updateMemoryLayer` / `:removeMemoryLayer` `{"memoryLayerId": "…", "position": 0}`. Each returns the updated variation.
-
-**Agent pool** (`agent_pools`): `{"metadata": {"name": "Specialists"}, "spec": {"description": "Route billing or shipping questions.", "assignments": [{"agentId": "agent_…"}, {"agentId": "agent_…"}], "instructions": "Pick the agent whose domain matches."}}`; optional `spec.state` is the JSON Schema of the pool tool's input. Member `agentId`s and the variation's `agentPoolId` must be canonical IDs (external IDs are rejected there). Pools are created `AGENT_POOL_STATE_INACTIVE`; `:activate` needs at least one published member. Assign a pool to a variation as `{"type": "agentPoolId", "agentPoolId": "apool_…"}`; it appears as one callable tool that routes to a member.
-
-**Schedule** (`agents/{agentId}/schedules`, no cron strings): `{"metadata": {"name": "Daily"}, "spec": {"schedule": {"timezone": "America/New_York", "calendars": [{"hour": [{"start": 9}], "dayOfWeek": [{"start": 1, "end": 5}]}]}, "overlapPolicy": "OVERLAP_POLICY_SKIP", "firstUserMessage": "Run the daily report.", "systemPromptData": {}}}`. Intervals: `"intervals": [{"every": "1800s"}]` (1 minute floor). Each fire creates an objective with `externalId` `schedule:<id>:<unixNano>`; filter objectives by `agentScheduleId`.
-
-**Objective** (`objectives`):
-
-```json
-{"agentId": "support-triager", "variationId": "support-triager-default",
- "metadata": {"externalId": "ticket-4821", "labels": {"source": "api"}},
- "systemPromptData": {"customer_name": "Ada"},
- "firstUserMessage": "Summarize the open tickets.",
- "secrets": [{"name": "MCP_TOKEN", "value": "per-user-token"}],
- "tenant": {"id": "acme-corp", "name": "Acme"}, "subject": {"id": "user-123"},
- "pinnedParameters": {"orgId": "acme-corp"},
- "episodicMemory": {"key": "customer-42"}}
-```
-
-The response carries the agent and variation under `configSnapshot` (there is no top-level `agentId`), plus `state`, `stateMessage`, `output`, and `info` counters. `agentId` is required; `systemPromptData` must satisfy the agent's `systemPromptDataSchema` when one is set; `firstUserMessage` or a variation `firstUserMessageTemplate` rendered from `firstUserMessageData` must produce text. `variationId` omitted means the agent's selection mode picks. `tenant`/`subject` upsert tenant records (subject needs tenant). `episodicMemory.key` is required when the agent has `enableEpisodicMemory` (unless `alwaysIncludeSubjectMemories` and a subject are set) and rejected otherwise. Pinned parameters are removed from tool schemas and forced onto every call. `clientTools` defines tools your app executes for this objective only.
-
-**Feedback** (`objectives/{id}/feedback`): `{"metadata": {}, "data": {"score": 1.0, "comment": "Accurate"}}`, score from -1.0 to 1.0; feeds weighted selection.
-
-**Memory** (`memory_layers`, `memory_layers/{id}/entries`): layer `{"metadata": {"name": "Runbooks", "externalId": "runbooks"}, "spec": {"type": "MEMORY_LAYER_TYPE_SKILLS"}}`; entry `{"metadata": {"name": "Postmortems"}, "spec": {"type": "content", "key": "skills/postmortem", "description": "Use when drafting a postmortem.", "content": "# …"}}` (or `"type": "uploadId"`). Keys are path-like (`^[a-zA-Z0-9!\-_.*'()/]+$`, no `cadenya/` or `system/` prefix). Episodic layers (`MEMORY_LAYER_TYPE_EPISODIC`) are created by the system per episodic key; do not assign them. Agents read layers through the built-in `get_memory` and `search_memory` tools; episodic agents write with `store_memory`.
-
-**API key** (`POST /v1/account/api_keys`): `{"metadata": {"name": "CI"}, "spec": {"permissions": ["objectives:manage", "agents:read"], "workspaceAssignments": [{"workspaceId": "workspace_…"}]}}`, or `"allWorkspaces": true` in place of the assignments; read `spec.token` from the response.
-
-**Upload** (`uploads`): `{"metadata": {"name": "spec.json"}, "spec": {"filename": "spec.json", "contentType": "application/json", "sizeBytes": "20480"}}` (≤100 MB) returns `info.uploadUrl` (presigned PUT, 15 minutes; only on create). PUT the bytes with exactly that `Content-Type` and length, poll `GET …/uploads/{id}` until `info.status` is `UPLOAD_STATUS_COMPLETE`, then reference the ID once from an OpenAPI tool set or memory entry (it becomes `UPLOAD_STATUS_CONSUMED`).
-
-**Widgets** (`widgets`): `{"metadata": {"name": "Support chat"}, "spec": {"agentId": "support-triager", "originAllowlist": ["https://app.example.com"]}}`; `info.host` is the embed host. **Widget sessions** (`widget_sessions`): `{"spec": {"widgetId": "wgt_…", "tenant": {"id": "acme-corp"}, "subject": {"id": "user-123"}, "expiresAt": "2026-08-28T12:00:00Z"}, "secrets": [...]}` (tenant and subject required) returns `credentials` (`sessionId`, `host`, `token`, `tokenExpiresAt` at most 15 minutes out, `sessionExpiresAt`) once, for your backend to hand to the browser. **Tenants** are created by assertion only; `DELETE …/tenants/{id}` erases everything they own.
+- [ ] `GET /v1/whoami` returns `defaultWorkspace.id`. Verify: 200, not 403.
+- [ ] Add the Tool Set's host as a trusted endpoint. Verify: `POST /v1/account/trusted_endpoints:verify` returns `RESULT_TRUSTED` for the URL.
+- [ ] Create the Tool Set, with its secrets in `spec.secrets` or as workspace secrets. Verify (MCP and OpenAPI sources): `GET …/tool_sets/{id}/tools` lists the synced tools.
+- [ ] Pick a model: `GET …/models?state=STATE_ENABLED`, then use a returned model's `metadata.id` (or `<provider-key-externalId>.<model-externalId>`). Never hardcode a model slug.
+- [ ] Create the Agent with `defaultVariation`. Verify: `GET …/agents/{id}/variations` shows the variation with its assignments.
+- [ ] `:publish` the Agent. Verify: `GET …/agents/{id}` has `state` `STATE_PUBLISHED`.
+- [ ] Run an objective with `POST …/objectives:stream` (see [Streaming](#streaming-sse)). Verify: a `stateChanged` to `OBJECTIVE_STATE_WAITING` or a terminal state arrives.
+- [ ] Submit feedback on the objective.
 
 ## Objective lifecycle and events
 
 States: `OBJECTIVE_STATE_PENDING` → `OBJECTIVE_STATE_RUNNING` → `OBJECTIVE_STATE_WAITING` (turn finished, awaiting `continue`) → back to running; `OBJECTIVE_STATE_INTERRUPTING` while an interrupt settles; terminal `OBJECTIVE_STATE_FINALIZED` (structured output extracted or sub-objective done), `OBJECTIVE_STATE_FAILED`, `OBJECTIVE_STATE_CANCELLED`, `OBJECTIVE_STATE_TIMED_OUT` (inactivity). The objective stays running while a tool call waits for approval or bare content.
 
-- `POST …/objectives/{id}:continue` `{"message": "…"}` from `OBJECTIVE_STATE_WAITING` returns `{"type": "event", "event": <userMessage>}`. With `"enqueue": true` a busy objective queues it instead and returns `{"type": "queuedAction", "queuedAction": {…}}`; list them at `GET …/queued_actions` and drop one with `…/queued_actions/{id}:remove` before the agent picks it up. Sub-objectives and schedule-driven objectives cannot be continued.
+- `POST …/objectives/{id}:continue` `{"message": "…"}` from `OBJECTIVE_STATE_WAITING` returns `{"type": "event", "event": <userMessage>}`. With `"enqueue": true` a busy objective queues it instead and returns `{"type": "queuedAction", "queuedAction": {…}}`; list them at `GET …/queued_actions` and drop one with `…/queued_actions/{id}:remove` before the Agent picks it up. Sub-objectives and schedule-driven objectives cannot be continued.
 - `:interrupt` `{}` stops foreground work (tool calls, approval waits, foreground sub-agents) and returns the `interrupted` event; the objective goes to `OBJECTIVE_STATE_INTERRUPTING`, then `OBJECTIVE_STATE_WAITING`.
 - `:compact` `{}` (optional `compactionConfig` override) returns a queued action: a waiting objective compacts now, a busy one before its next assistant turn. Running objectives also compact themselves at `compactionConfig.triggerThreshold`.
 - `:cancel` `{"reason": "…"}` cancels a waiting or pending objective at once; a running one is cancelled asynchronously, so poll for `OBJECTIVE_STATE_CANCELLED` or the `cancelled` event.
 - Tool approval: a tool with `requiresApproval` emits `toolApprovalRequested{toolCallId}` and waits up to 24h. `GET …/tool_calls?status=TOOL_CALL_STATUS_WAITING_FOR_APPROVAL`, then `:approve` `{}` or `:deny` `{"memo": "Use the read-only lookup instead."}`. Bare calls sit in `executionStatus=TOOL_CALL_EXECUTION_STATUS_WAITING_FOR_CONTENT` until `:setContent` `{"content": [{"type": "text", "text": {"text": "…"}}]}` (also `image`/`audio` blocks with base64 `data` and `mimeType`).
 - Structured output lands in the objective's `output` once `OBJECTIVE_STATE_FINALIZED`. Terminal objectives are hard-deleted after the account's retention TTL.
 
-Events (`GET …/objectives/{id}/events?sortOrder=asc`, resumable with `sinceEventId`): `{"metadata": {"id": "objevt_…"}, "contextWindowId": "objwin_…", "data": {"type": "<kind>", "<kind>": {…}}}`. Kinds: `userMessage{content}`, `assistantMessage{content, toolCalls[], completionId}`, `reasoning`, `toolApprovalRequested{toolCallId}`, `toolApproved`, `toolDenied{memo}`, `toolCalled{toolCallId, tool, arguments}`, `toolResult{toolCallId, result}`, `toolError{toolCallId, message}`, `memoryRead`, `contextWindowCompacted`, `subAgentSpawned`, `subAgentUpdated`, `notice`, `stateChanged{fromState, toState, message}`, `interrupted{message}`, `error{type, message}` (objective fails), `cancelled`, `timedOut`, `finalized{output}`. An `assistantMessage` with no `toolCalls` ends the turn.
+Events (`GET …/objectives/{id}/events?sortOrder=asc`, resumable with `sinceEventId`): `{"metadata": {"id": "objevt_…"}, "contextWindowId": "objwin_…", "data": {"type": "<kind>", "<kind>": {…}}}`. Kinds: `userMessage{content}`, `assistantMessage{content, toolCalls[], completionId}`, `reasoning`, `toolApprovalRequested{toolCallId}`, `toolApproved`, `toolDenied{memo}`, `toolCalled{toolCallId, tool, arguments}`, `toolResult{toolCallId, result}`, `toolError{toolCallId, message}`, `memoryRead`, `contextWindowCompacted`, `subAgentSpawned`, `subAgentUpdated`, `notice`, `stateChanged{fromState, toState, message}`, `interrupted{message}`, `error{type, message}` (objective fails), `cancelled`, `timedOut`, `finalized{output}`. A turn ends with `stateChanged` whose `toState` is `OBJECTIVE_STATE_WAITING`; terminal states write their own event (`finalized`, `error`, `cancelled`, `timedOut`) just before their `stateChanged`.
 
 ## Streaming (SSE)
 
@@ -199,14 +125,14 @@ Last-Event-ID: objevt_01M1338C9KQKAAB646W83TK8SS
 ```
 
 - Frames: `event: <data.type>`, `id: objevt_…`, `data: <ObjectiveEvent JSON>`. Frames without an `id` are never resume points: `open` (once) and `ping` (every 15s) housekeeping, `heartbeat` events (`hb_…`), and with `includeDeltas=true` the `assistantMessageDelta`/`reasoningDelta` text fragments (`dlt_…`). Concatenate deltas by `completionId`, then replace them with the durable `assistantMessage` or `reasoning` that carries the same `completionId`.
-- Without `Last-Event-ID` you receive only events created after connecting. With it, the server replays everything after that ID, then goes live. A non-`objevt_` ID fails with 400 and an ID that is not an event of this objective with 409, both before the stream opens; drop the header and backfill from the events list instead. To see history plus live without a gap: page through the events list, then stream from the newest ID (`GET …/events?sortOrder=desc&limit=1`).
-- **`events:stream` never closes** on a terminal state. Stop reading at `finalized`, `error`, `cancelled`, `timedOut`, or at a turn-ending `assistantMessage` if you only want one turn.
-- `POST …/objectives:stream` takes the objective create body plus optional `includeDeltas`, with `metadata.externalId` **required**: it creates the objective (or attaches to the existing one with that external ID, resuming from `Last-Event-ID`) and streams it on the same response. The first frame is `event: objective` with `{"type": "objective", "objective": {…}}`; every later frame is `{"type": "event", "event": <ObjectiveEvent>}`. This stream ends by itself once the objective is waiting or terminal.
-- Load balancers cut a connection at 10 minutes; reconnect with `Last-Event-ID`. Errors on these endpoints use `{"message": "…"}` bodies and 401 for bad credentials.
+- Without `Last-Event-ID` you receive only events created after connecting. With it, the server replays everything after that ID, then goes live. A non-`objevt_` ID fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`, and an ID that is not an event of this objective with 409 `Last-Event-ID does not name an event of this objective`, both before the stream opens; drop the header and backfill from the events list instead. To see history plus live without a gap: page through the events list, then stream from the newest ID (`GET …/events?sortOrder=desc&limit=1`).
+- **`events:stream` never closes**, not even on a terminal state. Stop reading at a `stateChanged` to `OBJECTIVE_STATE_WAITING` (end of turn) or to a terminal state. Use it only to attach to an existing objective; to start one, use create-and-stream.
+- `POST …/objectives:stream` takes the objective create body plus optional `includeDeltas`, with `metadata.externalId` **required**: it creates the objective (or attaches to the existing one with that external ID, resuming from `Last-Event-ID`) and streams it on the same response; this is the default way to run an objective. A newly created objective streams from its first event. The first frame is `event: objective` with `{"type": "objective", "objective": {…}}`; every later frame is `{"type": "event", "event": <ObjectiveEvent>}`. This stream ends by itself once the objective is `OBJECTIVE_STATE_WAITING` or terminal.
+- Connections are cut after about 10 minutes; reconnect with `Last-Event-ID` set to the last `objevt_` ID you received. Errors on these endpoints are `{"message": "…"}` bodies with no `code` or `details`, 401 for bad credentials, and 409 (not 400) for a failed precondition.
 
 ## Webhooks
 
-Set `spec.webhookEventsUrl` (HTTPS) on an agent and Cadenya POSTs every durable objective event for that agent:
+Set `spec.webhookEventsUrl` (HTTPS) on an Agent and Cadenya POSTs every durable objective event for that Agent:
 
 ```json
 {"type": "objective_event.tool_approval_requested", "timestamp": "2026-08-28T02:30:00Z",
@@ -214,8 +140,8 @@ Set `spec.webhookEventsUrl` (HTTPS) on an agent and Cadenya POSTs every durable 
 ```
 
 - `type` is `objective_event.` plus the snake_case event kind: `user_message`, `assistant_message`, `reasoning`, `tool_approval_requested`, `tool_approved`, `tool_denied`, `tool_called`, `tool_result`, `tool_error`, `memory_read`, `context_window_compacted`, `sub_agent_spawned`, `sub_agent_updated`, `notice`, `state_changed`, `interrupted`, `error`, `cancelled`, `timed_out`, `finalized`. Heartbeats and deltas are never sent.
-- Standard Webhooks headers: `webhook-id` (`wh_…`, idempotency key), `webhook-timestamp` (unix seconds), `webhook-signature` (one or more space-separated `v1,<base64>` entries; one valid entry is enough). The signature is HMAC-SHA256 over the string `<id>.<timestamp>.<raw body>`, keyed with the base64-decoded part after the `whsec_` prefix of the account's `info.webhookEventsHmacSecret` (visible on `GET /v1/account`, rotated by `POST /v1/account:rotateWebhookSigningKey`). Verify against the raw body bytes, compare in constant time, and reject timestamps more than 5 minutes off.
-- Delivery: 5 attempts with backoff, any non-2xx retries, a 410 disables that URL. Inspect attempts with `GET …/agents/{agentId}/webhook_deliveries?objectiveId=…`.
+- Standard Webhooks headers: `webhook-id` (`wh_…`, idempotency key), `webhook-timestamp` (unix seconds), `webhook-signature` (one or more space-separated `v1,<base64>` entries; one valid entry is enough). The signature is HMAC-SHA256 over the string `<id>.<timestamp>.<raw body>`, keyed with the base64-decoded part after the `whsec_` prefix of the account's `info.webhookEventsHmacSecret` (visible on `GET /v1/account`, rotated by `POST /v1/account:rotateWebhookSigningKey`). Verify against the raw body bytes (not a re-serialized object) and reject timestamps more than 5 minutes off.
+- Delivery: 5 attempts with backoff. Any non-2xx retries, except 410, which stops retrying that delivery. Inspect attempts with `GET …/agents/{agentId}/webhook_deliveries?objectiveId=…`.
 
 ## Quick recipe (curl)
 

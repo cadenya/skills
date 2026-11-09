@@ -1,6 +1,6 @@
 ---
 name: cadenya-start-without-account
-description: Gets a working Cadenya workspace for a user who has no Cadenya account, with no signup step. The CLI creates a temporary workspace and API key and returns a claim URL; the user opens it to keep the workspace, and an unclaimed workspace is permanently deleted 24 hours after creation. Use when a task needs Cadenya and `cadenya whoami` fails or no Cadenya credential exists, when the user says they don't have an account yet, on a `REQUIRES_CLAIM` or `TEMPORARY_WORKSPACE_CLAIMED` error, or on a question about a claim link. Not for a user who already has an account or API key; use cadenya-cli.
+description: Creates a temporary Cadenya workspace for a user who has no Cadenya account, with no signup step. The `cadenya` CLI (1.12.0 or later) creates the workspace and an API key and returns a claim URL; the user opens it to keep the workspace, and an unclaimed workspace is permanently deleted 24 hours after creation. Use when a task needs Cadenya and `cadenya whoami` fails or no Cadenya credential exists, when the user says they don't have an account yet, on a `REQUIRES_CLAIM` or `TEMPORARY_WORKSPACE_CLAIMED` error, or on a question about a claim link. Not for a user who already has an account or API key; use cadenya-cli.
 ---
 
 # Start with Cadenya without an account
@@ -29,11 +29,13 @@ cadenya auth status             # names the credential source in effect; always 
 - **`whoami` exits 0 and `auth status` names a stored login or `$CADENYA_API_KEY`:** the user already has an account. Don't create a temporary workspace; follow `cadenya-cli`. `--temporary` refuses to run while such a credential is configured.
 - **`whoami` exits 0 and `auth status` names `temporary workspace … (.cadenya/temporary.json)`:** this directory already has a live temporary workspace. Run the create command below anyway: it returns that workspace with `"reused": true` and creates nothing, which gives you the claim URL and deadline to re-share.
 
-Temporary workspaces need CLI 1.12.0 or later; older versions have no `workspaces create`. Check `cadenya --version`, and install or upgrade if needed:
+Temporary workspaces need CLI 1.12.0 or later. Older versions have no `workspaces create` and fail with `flag provided but not defined: -temporary`. Check the version first:
 
 ```sh
-brew install cadenya/tools/cadenya    # or: brew upgrade cadenya; Windows: choco install cadenya
+cadenya --version   # prints "cadenya version X.Y.Z (api …)"; X.Y.Z must be 1.12.0 or later
 ```
+
+If `cadenya` is missing or older, install or upgrade it with the package manager (`brew install cadenya/tools/cadenya` or `brew upgrade cadenya`; on Windows, `choco install cadenya` or `choco upgrade cadenya`), then run `cadenya --version` again. Package managers can lag the GitHub releases. If the version is still below 1.12.0, download the archive for the OS and architecture from https://github.com/cadenya/cadenya-cli/releases/latest, check it against that release's `checksums.txt`, and put the `cadenya` binary it contains on `PATH` ahead of the old one. Don't continue until `cadenya --version` reports 1.12.0 or later.
 
 ## Create the temporary workspace
 
@@ -78,7 +80,7 @@ You can create tool sets, agents and variations, publish agents and run objectiv
 
 Before you run an objective, ask the user which option they want:
 
-1. **Use the demo model.** It's the default model in a temporary workspace and costs nothing. It doesn't reason. When the variation has a read-only tool assigned (a GET operation, a read-only MCP tool, or a Bare tool, with no approval required), it calls one with made-up arguments, then returns a templated summary of the result. With no such tool, it returns a scripted reply and calls nothing. To show the full loop (tool call, events, completion), assign a read-only tool set first, for example an MCP tool set on the Faker MCP server (`--mcp-url https://free.cadenya.com/faker-mcp`). Tell the user so, and don't present its output as a real model's. Its model ID is `demo.demo` (provider key `demo`, model `demo`; `cadenya models list` also shows the canonical `model_…` ID), for example `--default-variation-model-id demo.demo` on `agents create`.
+1. **Use the demo model.** It's the default model in a temporary workspace and costs nothing. It doesn't reason. When the variation has a read-only tool assigned (a GET operation, a read-only MCP tool, or a Bare tool, with no approval required), it calls one with made-up arguments, then returns a templated summary of the result. With no such tool, it returns a scripted reply and calls nothing. To show the full loop (tool call, events, completion), assign a read-only tool set first, for example an MCP tool set on the Faker MCP server (`--mcp-url https://free.cadenya.com/faker-mcp`). Tell the user so, and don't present its output as a real model's. Because it's the workspace default, leave the model out of `agents create` and variations to use it. To name it explicitly, run `cadenya models list --display json` and pass the `Demo` model's `metadata.id`, or its reference key `<provider-key external ID>.<model external ID>` (normally `demo.demo`), as `--default-variation-model-id`.
 2. **Use their own provider key now.** Ask the user to put the key in an environment variable themselves; never ask them to paste it into the chat. Build the command with `cadenya schema ai-provider-keys create`, and pass the key on stdin so it stays off the command line, for example `printf '%s' "$ANTHROPIC_API_KEY" | cadenya ai-provider-keys create --name "Anthropic" --external-id anthropic --provider anthropic --api-key -`. Then `cadenya models list` shows the new models.
 3. **Claim first.** After the claim, the workspace gets Cadenya's promotional model credit (amount in `nextStep`) and objectives run with no key of their own.
 

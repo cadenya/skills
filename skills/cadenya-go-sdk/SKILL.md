@@ -1,15 +1,11 @@
 ---
 name: cadenya-go-sdk
-description: "Build Cadenya integrations with the official Go SDK, `go.cadenya.com/cadenya-go` (Go 1.22+, stdlib HTTP, typed params and builders). Covers client options, resource accessors and method names, request structs and unions, pagination, `*APIError` handling, SSE objective event streams, and Standard Webhooks verification. Use when writing or debugging Go that imports `go.cadenya.com/cadenya-go`, when a Go service needs to create tool sets, agents, or objectives, or when hitting `cadenya: missing API key`, `cadenya: missing "workspaceId"`, `must not be blank`, or an `*APIError` you need to classify."
+description: "Writes and debugs Go code that imports `go.cadenya.com/cadenya-go`, the official Cadenya Go SDK (Go 1.22+). Covers client options, resource accessors and method names, params structs, builders and unions, pagination, `*APIError` handling, objective event streams (`CreateAndStream`, `StreamEvents`), and Standard Webhooks verification. Use when a Go service creates Tool Sets, Agents, variations, or objectives, or when Go code hits `cadenya: missing API key`, `cadenya: missing \"workspaceId\"`, `must not be blank`, or an `*APIError` to classify. Not for other languages (use the TypeScript, Python, or Ruby SDK skills), raw HTTP (`cadenya-api`), or terminal work (`cadenya-cli`)."
 ---
 
-# Cadenya Go SDK usage
+# Cadenya Go SDK
 
-## Overview
-
-`go.cadenya.com/cadenya-go` (package `cadenya`) is generated from the Cadenya OpenAPI contract, so accessors, methods, field names, and enum values match the REST API one-to-one. Every signature is in the module's `api.md`; run `go doc go.cadenya.com/cadenya-go` for types.
-
-For wire conventions shared by every client (IDs and external IDs, field masks, error codes, pagination, streaming semantics, webhooks) see the `cadenya-api` skill. This skill covers what is specific to Go.
+`go.cadenya.com/cadenya-go` (package `cadenya`) is generated from the Cadenya OpenAPI contract, so accessors, methods, fields, and enum values match the REST API one-to-one. Every signature is in the module's `api.md`; `go doc go.cadenya.com/cadenya-go` lists the types. Wire conventions shared by every client (IDs and external IDs, field masks, error codes, streaming semantics) are in the `cadenya-api` skill.
 
 ## Install and construct
 
@@ -18,61 +14,58 @@ go get go.cadenya.com/cadenya-go
 ```
 
 ```go
-import cadenya "go.cadenya.com/cadenya-go"
-
-client, err := cadenya.NewClient()                      // reads env
-client, err := cadenya.NewClient(cadenya.WithAPIKey(key), cadenya.WithWorkspaceID("development"), cadenya.WithMaxRetries(2))
+client, err := cadenya.NewClient() // reads CADENYA_API_KEY, CADENYA_WORKSPACE_ID, ...
+client, err = cadenya.NewClient(cadenya.WithAPIKey(key), cadenya.WithWorkspaceID("development"), cadenya.WithMaxRetries(2))
 ```
 
 | Option | Env fallback | Notes |
 | --- | --- | --- |
 | `WithAPIKey` | `CADENYA_API_KEY` | required; missing everywhere returns `cadenya: missing API key: pass WithAPIKey or set CADENYA_API_KEY` |
-| `WithWorkspaceID` | `CADENYA_WORKSPACE_ID` | `workspace_…` or the external ID; default for every workspace-scoped call |
+| `WithWorkspaceID` | `CADENYA_WORKSPACE_ID` | `workspace_…` or the workspace external ID; default for every workspace-scoped call |
 | `WithBaseURL` | `CADENYA_BASE_URL` | default `https://api.cadenya.com` |
 | `WithWebhookSecret` | `CADENYA_WEBHOOK_SECRET` | for `client.Webhooks().Unwrap` |
-| `WithMaxRetries(n)` | | default 0; negative counts as 0 |
-| `WithHTTPClient(*http.Client)` | | default has no `Timeout` on purpose (streams) |
-| `WithDebugLog(io.Writer)` | | every exchange, `Authorization: [redacted]`; SSE bodies not consumed |
+| `WithMaxRetries(n)` | | default 0 |
+| `WithHTTPClient(*http.Client)` | | the default has no `Timeout`, so streams can outlive it |
+| `WithDebugLog(io.Writer)` | | logs every exchange with `Authorization: [redacted]`; SSE bodies are not consumed |
 
-An option passed explicitly but blank returns `cadenya: <name> must not be blank`; omit it to fall back to env. There is no `WithTimeout`: non-stream calls get a 60 s deadline when the `ctx` has none, so set your own via `context.WithTimeout`.
+An option passed explicitly but blank returns `cadenya: <name> must not be blank`; omit it to fall back to the environment. There is no `WithTimeout`: non-stream calls get a 60 s deadline when `ctx` has none, so set your own with `context.WithTimeout`.
 
-## Account and API key
+## API key and workspace
 
-- A person creates the account at https://app.cadenya.com/signup, and the Free plan needs no card. When there is no key yet, give your user that link.
-- The API keys page, https://app.cadenya.com/account/apiKeys, lists the account's keys. Sign-up creates a default key that reaches every workspace. Set the key as `CADENYA_API_KEY`: the SDK reads its options and the environment, never the CLI's stored login.
-- The `DefaultWorkspace.ID` of `client.Profiles().Whoami(ctx)` is the default workspace ID, the value for `CADENYA_WORKSPACE_ID`, and `cadenya workspaces list` lists the others.
-- From a terminal, `cadenya auth login` signs in through the browser with a one-time code (see `cadenya-cli`).
-- Keep tool sets, agents, variations, memory layers and widgets as YAML files in `.cadenya/` next to a `cadenya.yaml`, and apply them with `cadenya config apply` ([format](https://cadenya.com/docs/config-files), [GitHub Action](https://github.com/cadenya/cadenya-config-loader)). That keeps the setup in the repository instead of in a one-off provisioning script.
+- A person creates the account at https://app.cadenya.com/signup (the Free plan needs no card). If there is no key yet, give your user that link.
+- Keys are at https://app.cadenya.com/account/apiKeys. Put the key in `CADENYA_API_KEY` or a secret manager, never in code. The SDK never reads the CLI's stored login.
+- `client.Profiles().Whoami(ctx)` returns `DefaultWorkspace.ID`, the value for `CADENYA_WORKSPACE_ID`.
+- For setup that should live in the repository (Tool Sets, Agents, variations, memory layers, Widgets), prefer YAML in `.cadenya/` applied with `cadenya config apply` ([format](https://cadenya.com/docs/config-files)) over a one-off provisioning program.
 
-## Resources and method names
+## Accessors and methods
 
-Accessors are methods on `*Client` returning interfaces (mockable): `client.Agents()`, `client.AgentPools()`, `client.ToolSets()`, `client.Objectives()`, `client.APIKeys()`, `client.AIProviderKeys()`, `client.WorkspaceSecrets()`, `client.MemoryLayers()`, `client.Models()`, `client.Tenants()`, `client.Widgets()`, `client.WidgetSessions()`, `client.Uploads()`, `client.TrustedEndpoints()`, `client.Workspaces()`, `client.WorkspaceAdmin()`, `client.Profiles()`, `client.Accounts()`, `client.ToolSearch()`, `client.Webhooks()`. Nested: `client.Agents().Variations()`, `client.Agents().Schedules()`, `client.ToolSets().Tools()`, `client.ToolSets().Secrets()`, `client.MemoryLayers().Entries()`.
+Accessors are methods on `*Client` that return interfaces, so they can be mocked: `Agents()`, `AgentPools()`, `ToolSets()`, `Objectives()`, `APIKeys()`, `AIProviderKeys()`, `WorkspaceSecrets()`, `MemoryLayers()`, `Models()`, `Tenants()`, `Widgets()`, `WidgetSessions()`, `Uploads()`, `TrustedEndpoints()`, `Workspaces()`, `WorkspaceAdmin()`, `Profiles()`, `Accounts()`, `ToolSearch()`, `Webhooks()`. Nested: `Agents().Variations()`, `Agents().Schedules()`, `ToolSets().Tools()`, `ToolSets().Secrets()`, `MemoryLayers().Entries()`.
 
-Methods are `(ctx, <path IDs in order>, params *XParams, opts ...RequestOption)` and `params` may be `nil`; a few have no params at all (`Accounts().Retrieve(ctx)`, `Profiles().Whoami(ctx)`, `APIKeys().Retrieve(ctx, id)`). Initialisms are upper-cased (`WorkspaceID`, `ToolSetID`, `OpenAPI`). `Get` is `Retrieve`.
+Methods take `(ctx, <path IDs in order>, params *XParams, opts ...RequestOption)`, and `params` may be `nil`. A few take no params (`Accounts().Retrieve(ctx)`, `Profiles().Whoami(ctx)`, `APIKeys().Retrieve(ctx, id)`). Initialisms are upper-cased (`WorkspaceID`, `ToolSetID`, `OpenAPI`), and Get is `Retrieve`.
 
 ```go
-client.Agents().Retrieve(ctx, id, nil)
-client.Agents().Variations().Retrieve(ctx, agentID, id, nil)
+client.Agents().Variations().Retrieve(ctx, agentID, variationID, nil)
 client.Objectives().ApproveToolCall(ctx, objectiveID, toolCallID, nil)
-client.Objectives().StreamEvents(ctx, objectiveID, nil)                 // *Stream[ObjectiveEvent]
-client.Agents().Publish(ctx, id, nil)
 client.Objectives().Continue(ctx, objectiveID, &cadenya.ObjectiveContinueParams{Message: "…"})
 ```
 
-Params structs are `<Singular><Op>Params` (`AgentCreateParams`, `ObjectiveListParams`) with a fluent `<Singular><Op>Builder` (`(&cadenya.ObjectiveCreateBuilder{}).AgentID(id).SystemPromptData(m).ToParams()`). Each has `WorkspaceID *string` to override the client default per call.
+Params structs are `<Singular><Op>Params` (`AgentCreateParams`, `ObjectiveListParams`), each with a fluent `<Singular><Op>Builder` ending in `.ToParams()`. Every one has `WorkspaceID *string` to override the client default for one call.
 
 ## Request bodies
 
-- Required scalars are plain fields; optional scalars are pointers with `omitempty`. Helpers: `cadenya.String`, `cadenya.Int32`, `cadenya.Bool`, `cadenya.Float64`, `cadenya.Ptr[T]`. There is no "send null"; a nil pointer is omitted.
-- Response types nest `Metadata` + `Spec` + `Info` (+ `State`); enums are typed string constants named type + wire value: `cadenya.ObjectiveStateObjectiveStateFinalized`, `cadenya.AgentStateStatePublished`, `cadenya.AgentSpecVariationSelectionModeVariationSelectionModeRandom`.
-- Unions are structs with one pointer per variant; constructors set the `type` tag: `cadenya.NewToolSetAdapterMCP(...)`, `cadenya.NewAddAgentVariationAssignmentRequestParamToolSetID(...)`. Setting more than one variant fails at marshal time.
-- Types whose request shape differs from the response get a `Param` suffix (`CreateAgentVariationRequestParam`).
+- Required scalars are plain fields; optional scalars are `omitempty` pointers, set with `cadenya.String`, `cadenya.Int32`, `cadenya.Bool`, `cadenya.Float64`, or `cadenya.Ptr[T]`. A nil pointer is omitted; there is no way to send JSON `null`.
+- Resources nest `Metadata`, `Spec`, `Info` (and sometimes `State`). Enums are typed string constants named type + wire value: `cadenya.AgentStateStatePublished`, `cadenya.ObjectiveStateChangedToStateObjectiveStateWaiting`.
+- Unions are structs with one pointer per variant, and constructors set the `type` tag: `cadenya.NewToolSetAdapterMCP(...)`, `cadenya.NewAddAgentVariationAssignmentRequestParamToolSetID(...)`. Setting two variants fails at marshal time.
+- Request types whose shape differs from the response type get a `Param` suffix (`CreateAgentVariationRequestParam`).
+- Durations are strings (`"3600s"`).
 
 ```go
-// Tool set. Secrets interpolate as {{ secrets.NAME }} (workspace or tool set secret).
+// Tool Set. Headers reference secrets as {{ secrets.NAME }}; ${NAME} is rejected.
+// Spec.Secrets stores tool-set-scoped secrets in the same call, so the live source check can use them.
 toolSet, err := client.ToolSets().Create(ctx, &cadenya.ToolSetCreateParams{
     Metadata: &cadenya.CreateResourceMetadata{Name: "Support MCP", ExternalID: cadenya.String("support-mcp")},
     Spec: &cadenya.ToolSetSpec{
+        Secrets: []cadenya.ToolSetSpec_Secret{{Name: "MCP_TOKEN", Value: cadenya.String(os.Getenv("MCP_TOKEN"))}},
         Adapter: cadenya.Ptr(cadenya.NewToolSetAdapterMCP(cadenya.ToolSetAdapter_MCPVariant{
             MCP: &cadenya.ToolSetAdapter_MCP{
                 URL:     cadenya.String("https://mcp.example.com/mcp"),
@@ -84,7 +77,13 @@ toolSet, err := client.ToolSets().Create(ctx, &cadenya.ToolSetCreateParams{
     },
 })
 
-// Agent plus default variation in one call. Spec is required; VariationSelectionMode defaults to WEIGHTED.
+// Pick a model that exists in this workspace instead of hardcoding one.
+models, err := client.Models().List(ctx, (&cadenya.ModelListBuilder{}).
+    State(cadenya.ModelServiceListModelsStateStateEnabled).Limit(20).ToParams())
+if len(models.Items) == 0 { return errors.New("no enabled models; omit ModelConfig to use the workspace default") }
+modelID := models.Items[0].Metadata.ID // or "<provider-key-external-id>.<model-external-id>"
+
+// Agent plus its default variation in one call. VariationSelectionMode defaults to WEIGHTED.
 agent, err := client.Agents().Create(ctx, (&cadenya.AgentCreateBuilder{}).
     Metadata(&cadenya.CreateResourceMetadata{Name: "Support Triager", ExternalID: cadenya.String("support-triager")}).
     Spec(&cadenya.AgentSpec{Description: cadenya.String("Triages support tickets")}).
@@ -92,40 +91,34 @@ agent, err := client.Agents().Create(ctx, (&cadenya.AgentCreateBuilder{}).
         Metadata: &cadenya.CreateResourceMetadata{Name: "default"},
         Spec: &cadenya.AgentVariationSpec{
             SystemPromptTemplate: cadenya.String("You triage support tickets for {{ system_prompt_data.customer_name }}."),
-            ModelConfig:          &cadenya.AgentVariationSpec_ModelConfig{ModelID: "getting-started-key.anthropic-claude-sonnet-latest"}, // "<provider-key-slug>.<model-slug>" or model_…; omit for the workspace default
-            Constraints:          &cadenya.AgentVariationSpec_Constraints{InactivityTimeout: cadenya.String("3600s")},   // durations are strings
+            ModelConfig:          &cadenya.AgentVariationSpec_ModelConfig{ModelID: modelID},
+            Constraints:          &cadenya.AgentVariationSpec_Constraints{InactivityTimeout: cadenya.String("3600s")},
         },
     }).ToParams())
 
-// Assignment (tools attach to variations, not agents). Body is a union.
+// Tool Sets attach to variations, not Agents. Create returns no variation ID, so list them.
+variations, err := client.Agents().Variations().List(ctx, agent.Metadata.ID, nil)
+variationID := variations.Items[0].Metadata.ID
 _, err = client.Agents().Variations().AddAssignment(ctx, agent.Metadata.ID, variationID,
     &cadenya.AgentVariationAddAssignmentParams{
         Body: cadenya.Ptr(cadenya.NewAddAgentVariationAssignmentRequestParamToolSetID(
             cadenya.AddAgentVariationAssignmentRequest_ToolSetIDParam{ToolSetID: toolSet.Metadata.ID})),
     })
 
-// Objective
-objective, err := client.Objectives().Create(ctx, (&cadenya.ObjectiveCreateBuilder{}).
-    AgentID("external_id:support-triager").
-    SystemPromptData(map[string]any{"customer_name": "Ada"}).
-    FirstUserMessage("Summarize the open tickets.").
-    Metadata(&cadenya.CreateOperationMetadata{ExternalID: cadenya.String("ticket-4821")}).
-    ToParams())
+// Objectives on a draft Agent are rejected.
+_, err = client.Agents().Publish(ctx, agent.Metadata.ID, nil)
 ```
 
-Doc comments inside the module that mention `${SECRET_NAME}` are stale; the server rejects that syntax and accepts only `{{ secrets.NAME }}`. Create the secret before the tool set: the create resolves the headers and validates the source live (unreachable or no tools rejects it), but skips that check while a referenced secret is undefined.
+Tool Set create resolves the headers and checks the source live; an unreachable source or one with no tools is rejected. The check is skipped while a referenced secret is undefined, so a misspelled secret name is not caught at create. Doc comments inside the module that show `${SECRET_NAME}` are stale.
 
-## Reads and pagination
+## Lists and updates
 
 List methods return `*Page[T]` with `Items`, `NextCursor`, `HasNextPage()`, `GetNextPage(ctx)` (`nil, nil` when exhausted), and `All(ctx)`.
 
 ```go
 page, err := client.Agents().List(ctx, &cadenya.AgentListParams{Labels: cadenya.String("env=prod"), Limit: cadenya.Int32(50)})
 all, err := page.All(ctx)
-events, err := client.Objectives().ListEvents(ctx, objectiveID, &cadenya.ObjectiveListEventsParams{SortOrder: cadenya.String("asc")})
 ```
-
-## Updates
 
 `Update` params carry `Metadata`, `Spec`, and `UpdateMask *string` (comma-separated camelCase paths). Only masked paths change; maps and lists are replaced whole.
 
@@ -136,129 +129,154 @@ _, err = client.Agents().Update(ctx, agentID, &cadenya.AgentUpdateParams{
 })
 ```
 
-## Errors
+## Errors, retries, request options
 
-Non-2xx responses (after retries) return `*cadenya.APIError{StatusCode, Code, Message, Details}`; `Error()` reads `cadenya: <message> (http <status>, code <grpc code>)`. Everything else is a wrapped `error`: `cadenya: connection error: …`, `cadenya: protocol error: …`, and the context error itself on cancellation or deadline (`errors.Is(err, context.DeadlineExceeded)`).
+A non-2xx response (after retries) returns `*cadenya.APIError{StatusCode, Code, Message, Details}`, whose `Error()` reads `cadenya: <message> (http <status>, code <grpc code>)`. Other failures are wrapped errors (`cadenya: connection error: …`, `cadenya: protocol error: …`), or the context error itself on cancellation or deadline.
 
 ```go
 var apiErr *cadenya.APIError
 if errors.As(err, &apiErr) {
     switch apiErr.StatusCode {
+    case 400: // Message "validation failed"; Details holds google.rpc.BadRequest fieldViolations (field + description)
+    case 403: // Details holds an ErrorInfo whose reason is e.g. SCOPE_MISSING
     case 404: // wrong workspace, or an external ID that was never set
-    case 403: // apiErr.Details[0]["reason"] is an ErrorInfo reason such as SCOPE_MISSING
-    case 400: // apiErr.Details holds google.rpc.BadRequest fieldViolations with proto paths such as spec.model_config.model_id
+    case 409: // Message "resource with the same identifier already exists": the external ID is taken
+    case 429: // ErrorInfo reason ENTITLEMENT_LIMIT_REACHED: a plan limit, not a rate limit; retrying won't help
     }
 }
 ```
 
-## Retries and per-request options
-
-`RequestOption`s: `WithRequestHeader(k, v)`, `WithRequestRetries(n)`, `WithReconnect(bool)`, `WithLastEventID(id)`.
-
-Retries default to 0 and only apply to GET/HEAD/PUT/DELETE (408, 409, 429, 500, 502, 503, 504, transport errors), honoring `Retry-After`. `WithMaxRetries` enables them client-wide; `WithRequestRetries` opts a single POST or PATCH in.
+Request options: `WithRequestHeader(k, v)`, `WithRequestRetries(n)`, `WithReconnect(bool)`, `WithLastEventID(id)`. Retries apply only to GET, HEAD, PUT and DELETE, on 408, 409, 429, 500, 502, 503, 504 and transport errors, and honor `Retry-After`. `WithRequestRetries` opts a single POST or PATCH in.
 
 ## Streaming objective events
 
-Semantics you must code around:
+Default: start an objective and watch it on one connection with `Objectives().CreateAndStream` (`POST …/objectives:stream`).
 
-- `StreamEvents` without `WithLastEventID` delivers only events that arrive after the connection opens. With it, the server replays everything after that ID, then goes live.
-- The server never closes the stream. Call `stream.Close()` when you see a terminal event (`Finalized`, `Error`, `Cancelled`, `TimedOut`); `Next()` then returns false with a nil `Err()`.
-- An `AssistantMessage` with no `ToolCalls` ends the turn; the objective is `OBJECTIVE_STATE_WAITING` until you `Continue` it or the inactivity timeout fires.
-- Mid-stream transport drops reconnect from the last received ID (5 attempts per outage); `WithReconnect(false)` surfaces them as errors so you can resume with `WithLastEventID(stream.LastEventID())` on a new stream.
-- A replayed `toolApprovalRequested` for a call you already approved makes the approve call fail with 400 (code 9, not waiting for approval); treat that as already handled.
-- A clean end of stream (load balancers cut connections after about 10 minutes) makes `Next()` return false with a nil `Err()` and no terminal event. Reopen from `stream.LastEventID()` in an outer loop until you have seen a terminal event.
+- `Metadata.ExternalID` is required. It is the idempotency key: repeating the request, including the SDK's automatic reconnect (which re-sends the POST), attaches to the existing objective instead of starting another.
+- The first item has `.Objective` set, and every later one has `.Event`. A reconnect sends the objective item again.
+- The server ends the stream once the objective settles: a `StateChanged` event whose `ToState` is `OBJECTIVE_STATE_WAITING` (the turn is over), `FINALIZED`, `FAILED`, `CANCELLED` or `TIMED_OUT`. Terminal states also emit their own `Finalized`, `Error`, `Cancelled` or `TimedOut` event just before it.
 
 ```go
-page, err := client.Objectives().ListEvents(ctx, objectiveID, &cadenya.ObjectiveListEventsParams{SortOrder: cadenya.String("asc")})
-history, err := page.All(ctx)   // every page, not just the first 20
-var last string
-for _, ev := range history { handle(ev); last = ev.Metadata.ID }
-
-stream, err := client.Objectives().StreamEvents(ctx, objectiveID, nil, cadenya.WithLastEventID(last))
+stream, err := client.Objectives().CreateAndStream(ctx, (&cadenya.ObjectiveCreateAndStreamBuilder{}).
+    AgentID("external_id:support-triager").
+    Metadata(&cadenya.CreateAndStreamObjectiveRequest_Metadata{ExternalID: "ticket-4821"}).
+    SystemPromptData(map[string]any{"customer_name": "Ada"}).
+    FirstUserMessage("Summarize the open tickets.").
+    ToParams())
 if err != nil { return err }
 defer stream.Close()
+var objectiveID string
+settled := false
 for stream.Next() {
-    if handle(stream.Current()) { stream.Close() }
+    item := stream.Current()
+    switch {
+    case item.Objective != nil:
+        objectiveID = item.Objective.Objective.Metadata.ID
+    case item.Event != nil:
+        if handle(objectiveID, *item.Event.Event) { settled = true }
+    }
 }
 if err := stream.Err(); err != nil { return err }
+last := stream.LastEventID()
+if !settled { // the connection was cut before the objective settled
+    if last, err = watch(ctx, objectiveID, last); err != nil { return err }
+}
 
-// The union is a struct of variant pointers; the payload sits one level down under the same name.
-func handle(ev cadenya.ObjectiveEvent) (done bool) {
+// Next turn: Continue needs OBJECTIVE_STATE_WAITING, then watch from the checkpoint.
+_, err = client.Objectives().Continue(ctx, objectiveID, &cadenya.ObjectiveContinueParams{Message: "Which one is most urgent?"})
+if err != nil { return err }
+last, err = watch(ctx, objectiveID, last)
+```
+
+`Objectives().StreamEvents` attaches to an existing objective. Semantics to code around:
+
+- Without `WithLastEventID` it delivers only events that arrive after the connection opens. With it, the server replays every event after that ID, then goes live.
+- It never closes on its own. Stop on a settling `StateChanged`; `Close()` makes `Next()` return false with a nil `Err()`.
+- Resume only from a durable `objevt_` ID. Heartbeat (`hb_`) and, with `IncludeDeltas`, delta (`dlt_`) events reach `Current()` but carry no SSE ID, and sending one fails with 400 `Last-Event-ID must be a persisted objevt_ event ID`. `stream.LastEventID()` only ever holds a durable ID, so checkpoint with it, not `ev.Metadata.ID`.
+- Mid-stream transport drops reconnect from `LastEventID()` (5 attempts per outage). `WithReconnect(false)` returns them as errors instead.
+- Connections are cut after about 10 minutes. That is a clean end of stream: `Next()` returns false with a nil `Err()` and no reconnect, so reopen from `LastEventID()` in an outer loop.
+- To attach with no checkpoint, read history with `ListEvents` (`SortOrder: cadenya.String("asc")`, then `page.All(ctx)`), handle each event, and pass the last one's `Metadata.ID` (history holds only durable events).
+- A replayed `ToolApprovalRequested` for a call already approved makes `ApproveToolCall` fail with 400 (code 9, `not waiting for approval`); treat that as handled.
+
+```go
+// watch follows an existing objective until it settles and returns the new checkpoint.
+func watch(ctx context.Context, objectiveID, last string) (string, error) {
+    for {
+        s, err := client.Objectives().StreamEvents(ctx, objectiveID, nil, cadenya.WithLastEventID(last))
+        if err != nil { return last, err }
+        settled := false
+        for s.Next() {
+            if handle(objectiveID, s.Current()) { settled = true; break }
+        }
+        last = s.LastEventID()
+        s.Close()
+        if err := s.Err(); err != nil || settled { return last, err }
+    }
+}
+
+// handle reports whether the objective settled. The payload sits one level down under the variant's name.
+func handle(objectiveID string, ev cadenya.ObjectiveEvent) (settled bool) {
     d := ev.Data
+    if d == nil { return false }
     switch {
     case d.ToolApprovalRequested != nil:
         _, _ = client.Objectives().ApproveToolCall(ctx, objectiveID, d.ToolApprovalRequested.ToolApprovalRequested.ToolCallID, nil)
     case d.AssistantMessage != nil:
-        m := d.AssistantMessage.AssistantMessage
-        if m.Content != nil { fmt.Println(*m.Content) }
-        return len(m.ToolCalls) == 0
+        if c := d.AssistantMessage.AssistantMessage.Content; c != nil { fmt.Println(*c) }
     case d.Finalized != nil:
-        fmt.Println(d.Finalized.Finalized.Output); return true
-    case d.Error != nil, d.Cancelled != nil, d.TimedOut != nil:
-        return true
+        fmt.Println(d.Finalized.Finalized.Output)
+    case d.StateChanged != nil:
+        switch d.StateChanged.StateChanged.ToState {
+        case cadenya.ObjectiveStateChangedToStateObjectiveStateWaiting,
+            cadenya.ObjectiveStateChangedToStateObjectiveStateFinalized,
+            cadenya.ObjectiveStateChangedToStateObjectiveStateFailed,
+            cadenya.ObjectiveStateChangedToStateObjectiveStateCancelled,
+            cadenya.ObjectiveStateChangedToStateObjectiveStateTimedOut:
+            return true
+        }
     }
     return false
 }
 ```
 
-Only durable events (`objevt_…`) carry an SSE ID. Heartbeat events (`d.Heartbeat`, `hb_…`) and, with `IncludeDeltas`, `dlt_…` deltas also reach `Current()` but never move `stream.LastEventID()`, so checkpoint with that, not `ev.Metadata.ID`. Housekeeping frames (`open`, `ping`) are skipped.
-
-To start an objective and watch it on one connection, use `Objectives().CreateAndStream` with `ObjectiveCreateAndStreamParams` (same fields as create). `Metadata.ExternalID` is required: it is the idempotency key, so a reconnect re-POSTs and attaches to the same objective. The first item has `.Objective` set, every later one `.Event`, and unlike `StreamEvents` the server ends the stream once the objective settles (waiting, finalized, failed, cancelled, timed out).
+Use `Objectives().Create` instead only when nothing watches the objective (webhooks, polling); it takes the same fields with an optional external ID.
 
 ## Webhooks
 
 ```go
-body, _ := io.ReadAll(r.Body)                                  // raw bytes; a re-serialized body fails verification
-event, err := client.Webhooks().Unwrap(body, r.Header)         // or cadenya.UnwrapWebhook(secret, body, r.Header)
-// event.Type is "objective_event.tool_approval_requested" etc.; event.Data.Objective.ID is the objective,
-// event.Data.ObjectiveEvent.Data the same union as the stream
+body, err := io.ReadAll(r.Body)                        // raw bytes; a re-serialized body fails verification
+event, err := client.Webhooks().Unwrap(body, r.Header) // or cadenya.UnwrapWebhook(secret, body, r.Header)
+// event.Type is e.g. "objective_event.tool_approval_requested"; event.Data.Objective.ID is the objective;
+// event.Data.ObjectiveEvent.Data is the same union as the stream.
 ```
 
-Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, secret `whsec_…` (`client.Accounts().Retrieve(ctx)` → `.Info.WebhookEventsHMACSecret`), 5-minute tolerance. `cadenya.VerifyWebhook(secret, body, headers)` verifies without decoding; failures wrap `cadenya.ErrWebhookVerification`.
+Deliveries follow Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`), HMAC-SHA256 over `id.timestamp.body`, 5-minute tolerance. The secret starts with `whsec_`; read it from `client.Accounts().Retrieve(ctx)` → `.Info.WebhookEventsHMACSecret` and store it as `CADENYA_WEBHOOK_SECRET`. `cadenya.VerifyWebhook(secret, body, headers)` verifies without decoding; failures wrap `cadenya.ErrWebhookVerification`.
 
-## End to end
+## Build checklist
 
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-defer cancel()
-client, err := cadenya.NewClient(cadenya.WithWorkspaceID("development"))
-
-_, err = client.WorkspaceSecrets().Create(ctx, &cadenya.WorkspaceSecretCreateParams{
-    Metadata: &cadenya.CreateResourceMetadata{Name: "MCP_TOKEN"},
-    Spec:     &cadenya.WorkspaceSecretSpec{Value: cadenya.String(os.Getenv("MCP_TOKEN"))},
-})
-models, err := client.Models().List(ctx, (&cadenya.ModelListBuilder{}).Prefix("claude").State(cadenya.ModelServiceListModelsStateStateEnabled).Limit(1).ToParams())
-if len(models.Items) == 0 { log.Fatal("no enabled model matches") }
-// … toolSet and agent as in "Request bodies", with ModelID: models.Items[0].Metadata.ID …
-variations, err := client.Agents().Variations().List(ctx, agent.Metadata.ID, nil)   // Create returns the agent only
-variationID := variations.Items[0].Metadata.ID
-// … AddAssignment as above …
-_, err = client.Agents().Publish(ctx, agent.Metadata.ID, nil)                        // objectives on a STATE_DRAFT agent are rejected
-
-// … Create objective, stream as above …
-_, err = client.Objectives().CreateFeedback(ctx, objective.Metadata.ID, &cadenya.ObjectiveCreateFeedbackParams{
-    Metadata: &cadenya.CreateOperationMetadata{},
-    Data:     &cadenya.ObjectiveFeedbackData{Score: cadenya.Ptr(float32(1)), Comment: cadenya.String("Accurate summary")},
-})
-_, err = client.Objectives().Continue(ctx, objective.Metadata.ID, &cadenya.ObjectiveContinueParams{Message: "Which one is most urgent?"})
-```
+1. `NewClient` with the key and workspace from the environment; `Profiles().Whoami(ctx)` confirms the key works.
+2. Create the Tool Set with its secrets, then `ToolSets().Tools().List` to confirm it synced tools.
+3. List enabled models and create the Agent with its default variation.
+4. List variations, `AddAssignment` the Tool Set, then `Agents().Publish`; `Agents().Retrieve` should show `AgentStateStatePublished`.
+5. `CreateAndStream` the objective and handle approvals; `Continue` plus `watch` for each later turn.
+6. Optionally record a score with `Objectives().CreateFeedback`.
 
 ## Gotchas
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `cadenya: missing "workspaceId"` | no client default and `params.WorkspaceID` nil | `WithWorkspaceID`, `CADENYA_WORKSPACE_ID`, or set it on the params |
-| 400 `agent must be published to create an objective` | agent is `STATE_DRAFT` | `Agents().Publish` |
-| 400 on `spec.model_config.model_id` | wrong `ModelID` form, or the model is disabled | `model_…` from `Models().List`, or `<provider-key-slug>.<model-slug>` |
-| 429 `ENTITLEMENT_LIMIT_REACHED` (code 8) creating a variation | the plan caps non-archived variations across the account | update the existing variation, or archive one |
-| stream yields nothing for a finished objective | no `WithLastEventID` | replay via `ListEvents` (`SortOrder: asc`), then stream from the last ID |
-| `Next()` never returns false | the server keeps the stream open | `Close()` on terminal events |
-| `context deadline exceeded` after 60 s | default deadline for non-stream calls whose `ctx` has none | set your own deadline on `ctx`; streams get none |
-| POST silently not retried | retries apply to idempotent methods only | `cadenya.WithRequestRetries(n)` on that call |
-| `legacy dollar references are not supported` | `${NAME}` in a header | use `{{ secrets.NAME }}` |
-| `Agents().Create` result has no variation ID | `Agent.Info` only has `VariationCount` | `Agents().Variations().List(ctx, agentID, nil)` |
+| `cadenya: missing "workspaceId": pass it in params, set it on the client, or set the CADENYA_WORKSPACE_ID environment variable` | no client default and `params.WorkspaceID` is nil | `WithWorkspaceID`, `CADENYA_WORKSPACE_ID`, or set it on the params |
+| 400 `validation failed`, violation on `agent_id`: `agent must be published to create an objective` | the Agent is a draft | `Agents().Publish` |
+| 400 violation on `metadata.externalId` from `CreateAndStream` | no external ID | set `Metadata.ExternalID` |
+| 400 violation on `spec.model_config.model_id` | wrong form, or the model is disabled | `model_…` from `Models().List`, or `<provider-key-external-id>.<model-external-id>` |
+| 429 `the account has reached its plan's limit of N for agent_variations` (`ENTITLEMENT_LIMIT_REACHED`) | the plan caps non-archived variations across the account, and a default variation counts | update an existing variation, or archive one |
+| `StreamEvents` yields nothing for a finished objective | no `WithLastEventID` | replay with `ListEvents`, then stream from the last ID |
+| `StreamEvents` loop never ends | the server keeps that stream open | stop on a settling `StateChanged` and `Close()` |
+| `context deadline exceeded` after 60 s | default deadline for non-stream calls when `ctx` has none | set your own deadline on `ctx` |
+| a POST is not retried | retries cover idempotent methods only | `cadenya.WithRequestRetries(n)` on that call |
+| `legacy dollar references are not supported` | `${NAME}` in a header | `{{ secrets.NAME }}` |
 
 ## Related skills
 
 - `cadenya-api`: wire conventions and per-resource request shapes.
-- `cadenya-cli`: the same operations from a terminal; `cadenya … --dry-run` prints the exact JSON body the SDK sends.
+- `cadenya-cli`: the same operations from a terminal; `--dry-run` prints the request body without sending it.
